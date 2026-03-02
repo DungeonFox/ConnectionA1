@@ -7,7 +7,7 @@ import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
   createCoupledPosTargetShader
-} from './coupledShadersContract_dna_math.js';
+} from './coupledShadersContract_dna_math_full_em_v4.js';
 
 // ==================== ARCHITECTURE: SF_StateSchema ====================
 const TEX_SIZE = 64;
