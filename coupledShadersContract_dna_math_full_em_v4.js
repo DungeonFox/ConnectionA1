@@ -26,6 +26,7 @@ export function createChemShader() {
     uniform float pitch;
     uniform float qPitch;
     uniform float zipMode;
+    uniform float flowEnabled;
 
     uniform sampler2D extPos;
     uniform float extSamples;
@@ -97,6 +98,81 @@ export function createChemShader() {
       float CaGrow = bell(Ca, 0.12, 0.30, 0.55, 0.85);
       float CaShrink = smoothstep(0.70, 0.95, Ca);
       return vec2(CaGrow, CaShrink);
+    }
+
+    vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt){
+      // RS_Channels: x=segment, y=progress(s), z=role/tag, w=transition/event
+      float seg = clamp(floor(state.x + 0.5), 0.0, 5.0);
+      float s = clamp(state.y, 0.0, 1.0);
+      float role = mix(2.0, 1.0, isStrandA);
+      float eventTag = 0.0;
+
+      if (abs(state.z - role) > 0.25){
+        seg = 0.0;
+        s = 0.0;
+        eventTag = 8.0; // Role-tag mismatch initialization
+      }
+
+      float zipPause = 0.45;
+      float zipDetour = 0.30;
+      float zipReset = 0.15;
+
+      if (isActive > 0.5){
+        seg = 2.0;
+        s = 1.0;
+        eventTag = 1.0; // Arrived/locked to destination
+        return vec4(seg, s, role, eventTag);
+      }
+
+      if (flowOn < 0.5){
+        seg = 0.0;
+        s = 0.0;
+        eventTag = 5.0; // Flow disabled reset
+        return vec4(seg, s, role, eventTag);
+      }
+
+      if (localZip < zipReset){
+        seg = 5.0;
+        s = 0.0;
+        eventTag = 4.0; // Hard reset due to low zip quality
+        return vec4(seg, s, role, eventTag);
+      }
+
+      if (localZip < zipDetour){
+        seg = 4.0;
+        s = clamp(s + dt * 0.55, 0.0, 1.0);
+        eventTag = 3.0; // Detour mode
+        return vec4(seg, s, role, eventTag);
+      }
+
+      if (localZip < zipPause){
+        seg = 3.0;
+        s = min(s, 0.98);
+        eventTag = 2.0; // Pause mode
+        return vec4(seg, s, role, eventTag);
+      }
+
+      float v = dt * (0.45 + 1.2 * queue01);
+      if (seg < 0.5){
+        s += v;
+        if (s >= 1.0){
+          seg = 1.0;
+          s -= 1.0;
+          eventTag = 6.0;
+        }
+      } else if (seg < 1.5){
+        s += v;
+        if (s >= 1.0){
+          seg = 2.0;
+          s -= 1.0;
+          eventTag = 7.0;
+        }
+      } else {
+        seg = 2.0;
+        s = clamp(s + v, 0.0, 1.0);
+      }
+
+      return vec4(seg, clamp(s, 0.0, 1.0), role, eventTag);
     }
 
     void main(){
@@ -194,6 +270,26 @@ export function createChemShader() {
         c.y = mod(cPrev.y + dphi, 2.0 * PI);
 
         gl_FragColor = c;
+        return;
+      }
+
+      // ==================== ROUTE STATE (STRANDS) ====================
+      if ((i >= idxStrandA0 && i < idxStrandA0 + N) || (i >= idxStrandB0 && i < idxStrandB0 + N)){
+        float isStrandA = step(i, idxStrandA0 + N - 0.5);
+        float kNode = i - mix(idxStrandB0, idxStrandA0, isStrandA);
+
+        vec4 ck = readChem(kNode);
+        float g = ck.x;
+        float gGap = ck.z;
+        float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip = clamp(localZip, 0.0, 1.0);
+
+        float prevG = readChem(max(kNode - 1.0, 0.0)).x;
+        float queue01 = smoothstep(0.25, 0.85, prevG);
+        float isActive = step(0.05, g);
+
+        vec4 nextState = advanceRouteState(c, queue01, localZip, isStrandA, isActive, flowEnabled, dt);
+        gl_FragColor = nextState;
         return;
       }
 
@@ -393,11 +489,10 @@ export function createCoupledPosTargetShader() {
     }
 
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
-    // Yellow highway routing: origin -> base -> hub -> dest
-    vec3 routeViaYellow(float i, float kNode, vec3 dest, float queue01){
-      float seed = i * 17.17 + 13.37;
-      float t = time * flowSpeed;
-      float phase = fract(t * 0.08 + hash12(vec2(seed, 5.1)));
+    // Deterministic yellow highway from persisted route state
+    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
+      float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
+      float s = clamp(routeState.y, 0.0, 1.0);
 
       vec3 origin = getWellPosition(i);
       vec3 base = readPos(kNode).xyz;
@@ -410,18 +505,15 @@ export function createCoupledPosTargetShader() {
       float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
       vec3 hub = readPos(tipIdxP).xyz;
 
-      vec3 p = origin;
-      if (phase < 0.35){
-        float u = smoothstep(0.0, 0.35, phase);
-        p = mix(origin, base, u);
-      } else if (phase < 0.7){
-        float u = smoothstep(0.35, 0.7, phase);
-        p = mix(base, hub, u);
-      } else {
-        float u = smoothstep(0.7, 1.0, phase);
-        p = mix(hub, dest, u);
-      }
-      return mix(p, dest, clamp(queue01, 0.0, 1.0));
+      vec3 detour = mix(base, origin, 0.7);
+
+      if (seg < 0.5) return mix(origin, base, s);
+      if (seg < 1.5) return mix(base, hub, s);
+      if (seg < 2.5) return mix(hub, dest, s);
+      if (seg < 3.5) return hub;
+      if (seg < 4.5) return mix(hub, detour, s);
+      return origin;
+
     }
 
     void main(){
@@ -566,9 +658,8 @@ export function createCoupledPosTargetShader() {
 
         if (membership < 0.5){
           if (flowEnabled > 0.5){
-            float prevG = readChem(max(k - 1.0, 0.0)).x;
-            float queue01 = smoothstep(0.25, 0.85, prevG);
-            outPos = routeViaYellow(i, k, dest, queue01);
+            vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
+            outPos = routeViaYellow(i, k, dest, routeState);
           } else {
             outPos = getWellPosition(i);
           }
@@ -608,9 +699,8 @@ export function createCoupledPosTargetShader() {
 
         if (membership < 0.5){
           if (flowEnabled > 0.5){
-            float prevG = readChem(max(k - 1.0, 0.0)).x;
-            float queue01 = smoothstep(0.25, 0.85, prevG);
-            outPos = routeViaYellow(i, k, dest, queue01);
+            vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
+            outPos = routeViaYellow(i, k, dest, routeState);
           } else {
             outPos = getWellPosition(i);
           }
