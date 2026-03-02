@@ -69,6 +69,17 @@ const DEBUG_STATE = {
 
 const hud = document.getElementById('hud');
 
+let runtimeFatal = null;
+function setFatalRuntimeError(message){
+  if (runtimeFatal) return;
+  runtimeFatal = message;
+  console.error(`[RuntimeFatal] ${message}`);
+  if (hud){
+    hud.textContent = `Runtime error: ${message}`;
+    hud.style.color = '#ff6b6b';
+  }
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -193,7 +204,10 @@ function makeSystemB() {
   });
 
   const err = gpu.init();
-  if (err) console.error('System B init error:', err);
+  if (err){
+    setFatalRuntimeError(`System B init error: ${err}`);
+    return null;
+  }
 
   const geom = makeIndexGeometry(COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
@@ -342,7 +356,10 @@ function makeSystemA(getExtTexture) {
   });
 
   const err = gpu.init();
-  if (err) console.error('System A init error:', err);
+  if (err){
+    setFatalRuntimeError(`System A init error: ${err}`);
+    return null;
+  }
 
   routeStateVar.material.uniforms.dt = { value: 0.016 };
   routeStateVar.material.uniforms.nodeCount = { value: NODE_COUNT };
@@ -387,13 +404,20 @@ function makeSystemA(getExtTexture) {
 }
 
 const sysB = makeSystemB();
-const sysA = makeSystemA(() => sysB.posVar.material.uniforms.pos.value);
+const sysA = sysB ? makeSystemA(() => sysB.posVar.material.uniforms.pos.value) : null;
+
+if (!sysB || !sysA){
+  setFatalRuntimeError('GPU compute initialization failed; animation disabled.');
+}
 
 // Bind System B as EM field source for System A
-sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+if (sysA && sysB){
+  sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+}
 
 // ==================== CONTROLS ====================
 window.addEventListener('keydown', (e) => {
+  if (!sysA || !sysB || runtimeFatal) return;
   // Zip toggle
   if (e.key === 'z' || e.key === 'Z') {
     targetZipMode = (targetZipMode > 0.5) ? 0.0 : 1.0;
@@ -469,6 +493,7 @@ let lastT = performance.now();
 let frame = 0;
 
 function animate() {
+  if (!sysA || !sysB || runtimeFatal) return;
   requestAnimationFrame(animate);
 
   const now = performance.now();
@@ -562,7 +587,7 @@ function animate() {
   frame++;
 }
 
-animate();
+if (!runtimeFatal && sysA && sysB) animate();
 
 window.DNASpineArchitecture = {
   sysA, sysB, DEBUG_STATE, EM_STATE,
