@@ -1,4 +1,4 @@
-// coupledShadersContract_dna_math.js
+// coupledShadersContract_dna_math_full_em_v4.js
 // COMPLETE ARCHITECTURE IMPLEMENTATION
 // MDPI Photonics 2020 helix math + Dendritic spine calcium dynamics
 
