@@ -114,6 +114,9 @@ renderer.domElement.addEventListener('webglcontextcreationerror', (event) => {
   const msg = event && event.statusMessage ? event.statusMessage : 'unknown';
   setFatalRuntimeError(`WebGL context creation error: ${msg}`);
 }, false);
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  setFatalRuntimeError('WebGL context restored, but GPU compute resources must be reinitialized. Reload the page.');
+}, false);
 
 const scene = new THREE.Scene();
 
@@ -335,7 +338,6 @@ function makeSystemA(getExtTexture) {
     pulseFrequency: { value: 6.0 },
     pulseSpeed: { value: 2.0 },
     zipMode: { value: zipMode },
-    routeState: { value: null },
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
@@ -399,7 +401,6 @@ function makeSystemA(getExtTexture) {
   routeStateVar.material.uniforms.flowSpeed = posTargetVar.material.uniforms.flowSpeed;
   routeStateVar.material.uniforms.zipMode = posTargetVar.material.uniforms.zipMode;
 
-  posTargetVar.material.uniforms.routeState.value = gpu.getCurrentRenderTarget(routeStateVar).texture;
 
   const geom = makeIndexGeometry(RENDER_COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
