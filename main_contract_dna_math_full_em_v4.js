@@ -6,6 +6,7 @@ import { createPosTargetShader, createAccShader, createVelShader, createPosShade
 import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
+  createRouteStateShader,
   createCoupledPosTargetShader
 } from './coupledShadersContract_dna_math_full_em_v4.js';
 
@@ -68,11 +69,54 @@ const DEBUG_STATE = {
 
 const hud = document.getElementById('hud');
 
+let runtimeFatal = null;
+function setFatalRuntimeError(message){
+  if (runtimeFatal) return;
+  runtimeFatal = message;
+  console.error(`[RuntimeFatal] ${message}`);
+  if (hud){
+    hud.textContent = `Runtime error: ${message}`;
+    hud.style.color = '#ff6b6b';
+  }
+}
+
+function glErrorLabel(code){
+  if (code === 0) return 'NO_ERROR';
+  if (code === 1280) return 'INVALID_ENUM';
+  if (code === 1281) return 'INVALID_VALUE';
+  if (code === 1282) return 'INVALID_OPERATION';
+  if (code === 1285) return 'OUT_OF_MEMORY';
+  if (code === 1286) return 'INVALID_FRAMEBUFFER_OPERATION';
+  return `0x${code.toString(16)}`;
+}
+
+function failIfGlError(stage){
+  const gl = renderer.getContext();
+  const err = gl.getError();
+  if (err !== gl.NO_ERROR){
+    setFatalRuntimeError(`WebGL error at ${stage}: ${glErrorLabel(err)} (${err})`);
+    return true;
+  }
+  return false;
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 1);
 document.body.appendChild(renderer.domElement);
+
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  setFatalRuntimeError('WebGL context lost. Reload the page to reinitialize GPU resources.');
+}, false);
+renderer.domElement.addEventListener('webglcontextcreationerror', (event) => {
+  const msg = event && event.statusMessage ? event.statusMessage : 'unknown';
+  setFatalRuntimeError(`WebGL context creation error: ${msg}`);
+}, false);
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  setFatalRuntimeError('WebGL context restored, but GPU compute resources must be reinitialized. Reload the page.');
+}, false);
 
 const scene = new THREE.Scene();
 
@@ -192,7 +236,10 @@ function makeSystemB() {
   });
 
   const err = gpu.init();
-  if (err) console.error('System B init error:', err);
+  if (err){
+    setFatalRuntimeError(`System B init error: ${err}`);
+    return null;
+  }
 
   const geom = makeIndexGeometry(COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
@@ -231,13 +278,15 @@ function makeSystemA(getExtTexture) {
   }
 
   const chemVar      = gpu.addVariable('chem',      createChemShader(),             tex0);
+  const routeStateVar = gpu.addVariable('routeState', createRouteStateShader(),      tex0);
   const posTargetVar = gpu.addVariable('posTarget', createCoupledPosTargetShader(), tex0);
   const accVar       = gpu.addVariable('acc',       createAccShader(),              tex0);
   const velVar       = gpu.addVariable('vel',       createVelShader(),              tex0);
   const posVar       = gpu.addVariable('pos',       createPosShader(),              tex0);
 
   gpu.setVariableDependencies(chemVar,      [chemVar, posVar]);
-  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar]);
+  gpu.setVariableDependencies(routeStateVar,[routeStateVar, chemVar]);
+  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar, routeStateVar]);
   gpu.setVariableDependencies(accVar,       [accVar, posTargetVar, posVar, velVar]);
   gpu.setVariableDependencies(velVar,       [velVar, accVar]);
   gpu.setVariableDependencies(posVar,       [posVar, posTargetVar, velVar]);
@@ -338,7 +387,20 @@ function makeSystemA(getExtTexture) {
   });
 
   const err = gpu.init();
-  if (err) console.error('System A init error:', err);
+  if (err){
+    setFatalRuntimeError(`System A init error: ${err}`);
+    return null;
+  }
+
+  routeStateVar.material.uniforms.dt = { value: 0.016 };
+  routeStateVar.material.uniforms.nodeCount = { value: NODE_COUNT };
+  routeStateVar.material.uniforms.neckSeg = { value: NECK_SEG };
+  routeStateVar.material.uniforms.headCount = { value: HEAD_COUNT };
+  routeStateVar.material.uniforms.secondEnabled = { value: SECOND_ENABLED };
+  routeStateVar.material.uniforms.flowEnabled = posTargetVar.material.uniforms.flowEnabled;
+  routeStateVar.material.uniforms.flowSpeed = posTargetVar.material.uniforms.flowSpeed;
+  routeStateVar.material.uniforms.zipMode = posTargetVar.material.uniforms.zipMode;
+
 
   const geom = makeIndexGeometry(RENDER_COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
@@ -355,6 +417,7 @@ function makeSystemA(getExtTexture) {
   return { 
     gpu, 
     chemVar, 
+    routeStateVar,
     posTargetVar, 
     accVar, 
     velVar, 
@@ -371,13 +434,20 @@ function makeSystemA(getExtTexture) {
 }
 
 const sysB = makeSystemB();
-const sysA = makeSystemA(() => sysB.posVar.material.uniforms.pos.value);
+const sysA = sysB ? makeSystemA(() => sysB.posVar.material.uniforms.pos.value) : null;
+
+if (!sysB || !sysA){
+  setFatalRuntimeError('GPU compute initialization failed; animation disabled.');
+}
 
 // Bind System B as EM field source for System A
-sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+if (sysA && sysB){
+  sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+}
 
 // ==================== CONTROLS ====================
 window.addEventListener('keydown', (e) => {
+  if (!sysA || !sysB || runtimeFatal) return;
   // Zip toggle
   if (e.key === 'z' || e.key === 'Z') {
     targetZipMode = (targetZipMode > 0.5) ? 0.0 : 1.0;
@@ -453,6 +523,7 @@ let lastT = performance.now();
 let frame = 0;
 
 function animate() {
+  if (!sysA || !sysB || runtimeFatal) return;
   requestAnimationFrame(animate);
 
   const now = performance.now();
@@ -471,6 +542,7 @@ function animate() {
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
+  sysA.routeStateVar.material.uniforms.dt.value = dt;
 
   sysA.accVar.material.uniforms.time.value = t;
   sysA.accVar.material.uniforms.dt.value = dt;
@@ -489,6 +561,7 @@ function animate() {
   // Compute
   sysB.gpu.compute();
   sysA.gpu.compute();
+  if (failIfGlError('gpu.compute')) return;
 
   // Bind textures
   sysB.mat.uniforms.posTarget.value = sysB.gpu.getCurrentRenderTarget(sysB.posTargetVar).texture;
@@ -542,10 +615,11 @@ function animate() {
 
   controls.update();
   renderer.render(scene, camera);
+  if (failIfGlError('renderer.render')) return;
   frame++;
 }
 
-animate();
+if (!runtimeFatal && sysA && sysB) animate();
 
 window.DNASpineArchitecture = {
   sysA, sysB, DEBUG_STATE, EM_STATE,
