@@ -234,6 +234,113 @@ export function createChemShader() {
   `;
 }
 
+export function createRouteStateShader() {
+  return /* glsl */`
+    uniform float dt;
+    uniform float nodeCount;
+    uniform float neckSeg;
+    uniform float headCount;
+    uniform float secondEnabled;
+    uniform float flowEnabled;
+    uniform float flowSpeed;
+    uniform float zipMode;
+
+    vec2 uvFromIndex(float idx){
+      float x = mod(idx, resolution.x);
+      float y = floor(idx / resolution.x);
+      return (vec2(x, y) + 0.5) / resolution.xy;
+    }
+
+    vec4 readChem(float idx){ return texture2D(chem, uvFromIndex(idx)); }
+    vec4 readState(float idx){ return texture2D(routeState, uvFromIndex(idx)); }
+
+    float zipAtNode(float kNode){
+      vec4 ck = readChem(kNode);
+      float gGap = ck.z;
+      float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+      return clamp(localZip, 0.0, 1.0);
+    }
+
+    void main(){
+      vec2 frag = floor(gl_FragCoord.xy);
+      float i = frag.y * resolution.x + frag.x;
+
+      float Nn = nodeCount;
+      float neck = neckSeg;
+      float head = headCount;
+      float perSpine = neck + head;
+
+      float idxStrandA0 = Nn;
+      float idxStrandB0 = Nn + Nn;
+      float idxSpineP0  = Nn + 2.0*Nn;
+      float spinePCount = Nn * perSpine;
+      float idxSpineS0  = idxSpineP0 + spinePCount;
+      float spineSCount = Nn * perSpine * secondEnabled;
+      float activeEnd   = idxSpineS0 + spineSCount;
+
+      vec4 prev = readState(i);
+      vec4 outState = vec4(0.0);
+
+      if (i >= activeEnd){
+        gl_FragColor = outState;
+        return;
+      }
+
+      float kNode = -1.0;
+      float roleTag = 0.0;
+      if (i >= idxStrandA0 && i < idxStrandA0 + Nn){
+        kNode = i - idxStrandA0;
+        roleTag = 5.0;
+      } else if (i >= idxStrandB0 && i < idxStrandB0 + Nn){
+        kNode = i - idxStrandB0;
+        roleTag = 4.0;
+      } else {
+        gl_FragColor = outState;
+        return;
+      }
+
+      float seg = floor(prev.x + 0.5);
+      float s = clamp(prev.y, 0.0, 1.0);
+      float transition = 0.0;
+
+      if (seg < 0.0 || seg > 2.0){
+        seg = 0.0;
+        s = 0.0;
+        transition = 4.0;
+      }
+
+      float zipLocal = zipAtNode(kNode);
+      float zipQuality = min(zipMode, zipLocal);
+      float zipThreshold = 0.35;
+
+      if (flowEnabled < 0.5){
+        seg = 0.0;
+        s = 0.0;
+        transition = 4.0;
+      } else if (zipQuality < zipThreshold){
+        if (zipQuality < 0.15){
+          seg = 0.0;
+          s = 0.0;
+          transition = 3.0;
+        } else {
+          s = max(s - dt * flowSpeed * 0.25, 0.0);
+          transition = 2.0;
+        }
+      } else {
+        s += dt * flowSpeed * 0.42;
+        if (s >= 1.0){
+          s = 0.0;
+          seg = min(seg + 1.0, 2.0);
+          transition = 1.0;
+        }
+      }
+
+      outState = vec4(seg, s, roleTag, transition);
+      gl_FragColor = outState;
+    }
+  `;
+}
+
 // ==================== ARCHITECTURE: SF_HelixGenerator + SF_FrameTransport ====================
 // MDPI-compliant helix generation with parallel transport frame
 
@@ -285,6 +392,7 @@ export function createCoupledPosTargetShader() {
 
     vec4 readPos(float idx){ return texture2D(pos, uvFromIndex(idx)); }
     vec4 readChem(float idx){ return texture2D(chem, uvFromIndex(idx)); }
+    vec4 readRouteState(float idx){ return texture2D(routeState, uvFromIndex(idx)); }
 
     // ==================== ARCHITECTURE: FT_Transport ====================
     // Parallel transport frame (rotation-minimizing Bishop frame)
@@ -395,9 +503,10 @@ export function createCoupledPosTargetShader() {
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
     // Yellow highway routing: origin -> base -> hub -> dest
     vec3 routeViaYellow(float i, float kNode, vec3 dest, float queue01){
-      float seed = i * 17.17 + 13.37;
-      float t = time * flowSpeed;
-      float phase = fract(t * 0.08 + hash12(vec2(seed, 5.1)));
+      vec4 rs = readRouteState(i);
+      float segment = floor(rs.x + 0.5);
+      float s = clamp(rs.y, 0.0, 1.0);
+      float transition = floor(rs.w + 0.5);
 
       vec3 origin = getWellPosition(i);
       vec3 base = readPos(kNode).xyz;
@@ -410,18 +519,26 @@ export function createCoupledPosTargetShader() {
       float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
       vec3 hub = readPos(tipIdxP).xyz;
 
-      vec3 p = origin;
-      if (phase < 0.35){
-        float u = smoothstep(0.0, 0.35, phase);
-        p = mix(origin, base, u);
-      } else if (phase < 0.7){
-        float u = smoothstep(0.35, 0.7, phase);
-        p = mix(base, hub, u);
-      } else {
-        float u = smoothstep(0.7, 1.0, phase);
-        p = mix(hub, dest, u);
+      if (segment < 0.0 || segment > 2.0){
+        return origin;
       }
-      return mix(p, dest, clamp(queue01, 0.0, 1.0));
+
+      vec3 p = origin;
+      if (segment < 0.5){
+        p = mix(origin, base, smoothstep(0.0, 1.0, s));
+      } else if (segment < 1.5){
+        p = mix(base, hub, smoothstep(0.0, 1.0, s));
+      } else {
+        p = mix(hub, dest, smoothstep(0.0, 1.0, s));
+      }
+
+      float allowBlend = step(0.0, segment) * step(segment, 2.0) * step(0.5, flowEnabled);
+      float queueBlend = clamp(queue01, 0.0, 1.0) * allowBlend;
+      if (transition > 1.5){
+        queueBlend *= 0.25;
+      }
+
+      return mix(p, dest, queueBlend);
     }
 
     void main(){

@@ -6,6 +6,7 @@ import { createPosTargetShader, createAccShader, createVelShader, createPosShade
 import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
+  createRouteStateShader,
   createCoupledPosTargetShader
 } from './coupledShadersContract_dna_math_full_em_v4.js';
 
@@ -68,11 +69,32 @@ const DEBUG_STATE = {
 
 const hud = document.getElementById('hud');
 
+let runtimeFatal = null;
+function setFatalRuntimeError(message){
+  if (runtimeFatal) return;
+  runtimeFatal = message;
+  console.error(`[RuntimeFatal] ${message}`);
+  if (hud){
+    hud.textContent = `Runtime error: ${message}`;
+    hud.style.color = '#ff6b6b';
+  }
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 1);
 document.body.appendChild(renderer.domElement);
+
+let rafHandle = null;
+renderer.domElement.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  setFatalRuntimeError('WebGL context lost; stopped animation to avoid crash loop.');
+  if (rafHandle !== null){
+    cancelAnimationFrame(rafHandle);
+    rafHandle = null;
+  }
+}, false);
 
 const scene = new THREE.Scene();
 
@@ -192,7 +214,10 @@ function makeSystemB() {
   });
 
   const err = gpu.init();
-  if (err) console.error('System B init error:', err);
+  if (err){
+    setFatalRuntimeError(`System B init error: ${err}`);
+    return null;
+  }
 
   const geom = makeIndexGeometry(COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
@@ -231,13 +256,15 @@ function makeSystemA(getExtTexture) {
   }
 
   const chemVar      = gpu.addVariable('chem',      createChemShader(),             tex0);
+  const routeStateVar = gpu.addVariable('routeState', createRouteStateShader(),      tex0);
   const posTargetVar = gpu.addVariable('posTarget', createCoupledPosTargetShader(), tex0);
   const accVar       = gpu.addVariable('acc',       createAccShader(),              tex0);
   const velVar       = gpu.addVariable('vel',       createVelShader(),              tex0);
   const posVar       = gpu.addVariable('pos',       createPosShader(),              tex0);
 
   gpu.setVariableDependencies(chemVar,      [chemVar, posVar]);
-  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar]);
+  gpu.setVariableDependencies(routeStateVar,[routeStateVar, chemVar]);
+  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar, routeStateVar]);
   gpu.setVariableDependencies(accVar,       [accVar, posTargetVar, posVar, velVar]);
   gpu.setVariableDependencies(velVar,       [velVar, accVar]);
   gpu.setVariableDependencies(posVar,       [posVar, posTargetVar, velVar]);
@@ -289,6 +316,7 @@ function makeSystemA(getExtTexture) {
     pulseFrequency: { value: 6.0 },
     pulseSpeed: { value: 2.0 },
     zipMode: { value: zipMode },
+    routeState: { value: null },
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
@@ -338,7 +366,21 @@ function makeSystemA(getExtTexture) {
   });
 
   const err = gpu.init();
-  if (err) console.error('System A init error:', err);
+  if (err){
+    setFatalRuntimeError(`System A init error: ${err}`);
+    return null;
+  }
+
+  routeStateVar.material.uniforms.dt = { value: 0.016 };
+  routeStateVar.material.uniforms.nodeCount = { value: NODE_COUNT };
+  routeStateVar.material.uniforms.neckSeg = { value: NECK_SEG };
+  routeStateVar.material.uniforms.headCount = { value: HEAD_COUNT };
+  routeStateVar.material.uniforms.secondEnabled = { value: SECOND_ENABLED };
+  routeStateVar.material.uniforms.flowEnabled = posTargetVar.material.uniforms.flowEnabled;
+  routeStateVar.material.uniforms.flowSpeed = posTargetVar.material.uniforms.flowSpeed;
+  routeStateVar.material.uniforms.zipMode = posTargetVar.material.uniforms.zipMode;
+
+  posTargetVar.material.uniforms.routeState.value = gpu.getCurrentRenderTarget(routeStateVar).texture;
 
   const geom = makeIndexGeometry(RENDER_COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
@@ -355,6 +397,7 @@ function makeSystemA(getExtTexture) {
   return { 
     gpu, 
     chemVar, 
+    routeStateVar,
     posTargetVar, 
     accVar, 
     velVar, 
@@ -371,13 +414,20 @@ function makeSystemA(getExtTexture) {
 }
 
 const sysB = makeSystemB();
-const sysA = makeSystemA(() => sysB.posVar.material.uniforms.pos.value);
+const sysA = sysB ? makeSystemA(() => sysB.posVar.material.uniforms.pos.value) : null;
+
+if (!sysB || !sysA){
+  setFatalRuntimeError('GPU compute initialization failed; animation disabled.');
+}
 
 // Bind System B as EM field source for System A
-sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+if (sysA && sysB){
+  sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+}
 
 // ==================== CONTROLS ====================
 window.addEventListener('keydown', (e) => {
+  if (!sysA || !sysB || runtimeFatal) return;
   // Zip toggle
   if (e.key === 'z' || e.key === 'Z') {
     targetZipMode = (targetZipMode > 0.5) ? 0.0 : 1.0;
@@ -453,99 +503,111 @@ let lastT = performance.now();
 let frame = 0;
 
 function animate() {
-  requestAnimationFrame(animate);
-
-  const now = performance.now();
-  const dt = Math.min((now - lastT) / 1000, 0.033);
-  lastT = now;
-
-  zipMode += (targetZipMode - zipMode) * (1.0 - Math.exp(-dt * 3.0));
-
-  const t = now / 1000;
-
-  // Update all uniforms
-  sysA.chemVar.material.uniforms.time.value = t;
-  sysA.chemVar.material.uniforms.dt.value = dt;
-  sysA.chemVar.material.uniforms.zipMode.value = zipMode;
-  
-  sysA.posTargetVar.material.uniforms.time.value = t;
-  sysA.posTargetVar.material.uniforms.dt.value = dt;
-  sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
-
-  sysA.accVar.material.uniforms.time.value = t;
-  sysA.accVar.material.uniforms.dt.value = dt;
-  sysA.velVar.material.uniforms.time.value = t;
-  sysA.velVar.material.uniforms.dt.value = dt;
-  sysA.posVar.material.uniforms.time.value = t;
-  sysA.posVar.material.uniforms.dt.value = dt;
-  sysA.posVar.material.uniforms.frame.value = frame;
-
-  // System B updates
-  sysB.posTargetVar.material.uniforms.time.value = t;
-  sysB.accVar.material.uniforms.time.value = t;
-  sysB.velVar.material.uniforms.time.value = t;
-  sysB.posVar.material.uniforms.time.value = t;
-
-  // Compute
-  sysB.gpu.compute();
-  sysA.gpu.compute();
-
-  // Bind textures
-  sysB.mat.uniforms.posTarget.value = sysB.gpu.getCurrentRenderTarget(sysB.posTargetVar).texture;
-  sysB.mat.uniforms.acc.value       = sysB.gpu.getCurrentRenderTarget(sysB.accVar).texture;
-  sysB.mat.uniforms.vel.value       = sysB.gpu.getCurrentRenderTarget(sysB.velVar).texture;
-  sysB.mat.uniforms.pos.value       = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
-
-  sysA.mat.uniforms.posTarget.value = sysA.gpu.getCurrentRenderTarget(sysA.posTargetVar).texture;
-  sysA.mat.uniforms.acc.value       = sysA.gpu.getCurrentRenderTarget(sysA.accVar).texture;
-  sysA.mat.uniforms.vel.value       = sysA.gpu.getCurrentRenderTarget(sysA.velVar).texture;
-  sysA.mat.uniforms.pos.value       = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
-  sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
-
-  // Debug uniforms
-  if (sysA.mat.uniforms.showZipField) sysA.mat.uniforms.showZipField.value = DEBUG_STATE.showZipField;
-  if (sysA.mat.uniforms.showCalcium) sysA.mat.uniforms.showCalcium.value = DEBUG_STATE.showCalcium;
-  if (sysA.mat.uniforms.debugMode) sysA.mat.uniforms.debugMode.value = DEBUG_STATE.mode;
-
-  // HUD
-  if (hud) {
-    const arch = sysA.architecture;
-    const emStatus = EM_STATE.enabled ? 'ON' : 'OFF';
-    const emMode = EM_STATE.mode === 1.0 ? 'TUNNEL' : 'HELIX';
-    const debugStatus = DEBUG_STATE.mode === 0 ? 'NORMAL' : 
-                       DEBUG_STATE.mode === 1 ? 'ZIP FIELD' : 
-                       DEBUG_STATE.mode === 2 ? 'CALCIUM' : 'OTHER';
-    
-    hud.textContent = [
-      `=== DNA-Spine with EM Field ===`,
-      `Z: zip | D: debug zip | C: debug Ca | E: EM toggle`,
-      `R/F: EM radius +/- | T: EM mode`,
-      ``,
-      `[SF_HelixGenerator - MDPI Parameters]`,
-      `  r=${arch.HELIX_R.toFixed(2)} h=${arch.PITCH.toFixed(2)} α_exp=${(arch.ALPHA_EXP * 180 / Math.PI).toFixed(1)}°`,
-      `  α_0=${(arch.ALPHA_0 * 180 / Math.PI).toFixed(1)}° (critical angle)`,
-      ``,
-      `[EM FIELD - ${emStatus}]`,
-      `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,
-      `  Twist: ${EM_STATE.twist} | TwistHz: ${EM_STATE.twistHz}`,
-      `  Physics: ${EM_STATE.enabled ? 'Radial REPULSION (α < α₀)' : 'No EM force'}`,
-      ``,
-      `[SF_ZipSolver]`,
-      `  zipMode=${zipMode.toFixed(3)} (target: ${targetZipMode.toFixed(1)})`,
-      ``,
-      `[SF_DebugValidate]`,
-      `  Mode: ${debugStatus}`,
-      ``,
-      `Frame: ${frame} | dt: ${(dt*1000).toFixed(2)}ms`
-    ].join('\n');
+  if (!sysA || !sysB || runtimeFatal){
+    rafHandle = null;
+    return;
   }
 
-  controls.update();
-  renderer.render(scene, camera);
-  frame++;
+  try {
+    const now = performance.now();
+    const dt = Math.min((now - lastT) / 1000, 0.033);
+    lastT = now;
+
+    zipMode += (targetZipMode - zipMode) * (1.0 - Math.exp(-dt * 3.0));
+
+    const t = now / 1000;
+
+    // Update all uniforms
+    sysA.chemVar.material.uniforms.time.value = t;
+    sysA.chemVar.material.uniforms.dt.value = dt;
+    sysA.chemVar.material.uniforms.zipMode.value = zipMode;
+    
+    sysA.posTargetVar.material.uniforms.time.value = t;
+    sysA.posTargetVar.material.uniforms.dt.value = dt;
+    sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
+    sysA.routeStateVar.material.uniforms.dt.value = dt;
+
+    sysA.accVar.material.uniforms.time.value = t;
+    sysA.accVar.material.uniforms.dt.value = dt;
+    sysA.velVar.material.uniforms.time.value = t;
+    sysA.velVar.material.uniforms.dt.value = dt;
+    sysA.posVar.material.uniforms.time.value = t;
+    sysA.posVar.material.uniforms.dt.value = dt;
+    sysA.posVar.material.uniforms.frame.value = frame;
+
+    // System B updates
+    sysB.posTargetVar.material.uniforms.time.value = t;
+    sysB.accVar.material.uniforms.time.value = t;
+    sysB.velVar.material.uniforms.time.value = t;
+    sysB.posVar.material.uniforms.time.value = t;
+
+    // Compute
+    sysB.gpu.compute();
+    sysA.gpu.compute();
+
+    // Bind textures
+    sysB.mat.uniforms.posTarget.value = sysB.gpu.getCurrentRenderTarget(sysB.posTargetVar).texture;
+    sysB.mat.uniforms.acc.value       = sysB.gpu.getCurrentRenderTarget(sysB.accVar).texture;
+    sysB.mat.uniforms.vel.value       = sysB.gpu.getCurrentRenderTarget(sysB.velVar).texture;
+    sysB.mat.uniforms.pos.value       = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+
+    sysA.mat.uniforms.posTarget.value = sysA.gpu.getCurrentRenderTarget(sysA.posTargetVar).texture;
+    sysA.mat.uniforms.acc.value       = sysA.gpu.getCurrentRenderTarget(sysA.accVar).texture;
+    sysA.mat.uniforms.vel.value       = sysA.gpu.getCurrentRenderTarget(sysA.velVar).texture;
+    sysA.mat.uniforms.pos.value       = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
+    sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
+
+    // Debug uniforms
+    if (sysA.mat.uniforms.showZipField) sysA.mat.uniforms.showZipField.value = DEBUG_STATE.showZipField;
+    if (sysA.mat.uniforms.showCalcium) sysA.mat.uniforms.showCalcium.value = DEBUG_STATE.showCalcium;
+    if (sysA.mat.uniforms.debugMode) sysA.mat.uniforms.debugMode.value = DEBUG_STATE.mode;
+
+    // HUD
+    if (hud) {
+      const arch = sysA.architecture;
+      const emStatus = EM_STATE.enabled ? 'ON' : 'OFF';
+      const emMode = EM_STATE.mode === 1.0 ? 'TUNNEL' : 'HELIX';
+      const debugStatus = DEBUG_STATE.mode === 0 ? 'NORMAL' : 
+                         DEBUG_STATE.mode === 1 ? 'ZIP FIELD' : 
+                         DEBUG_STATE.mode === 2 ? 'CALCIUM' : 'OTHER';
+      
+      hud.textContent = [
+        `=== DNA-Spine with EM Field ===`,
+        `Z: zip | D: debug zip | C: debug Ca | E: EM toggle`,
+        `R/F: EM radius +/- | T: EM mode`,
+        ``,
+        `[SF_HelixGenerator - MDPI Parameters]`,
+        `  r=${arch.HELIX_R.toFixed(2)} h=${arch.PITCH.toFixed(2)} α_exp=${(arch.ALPHA_EXP * 180 / Math.PI).toFixed(1)}°`,
+        `  α_0=${(arch.ALPHA_0 * 180 / Math.PI).toFixed(1)}° (critical angle)`,
+        ``,
+        `[EM FIELD - ${emStatus}]`,
+        `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,
+        `  Twist: ${EM_STATE.twist} | TwistHz: ${EM_STATE.twistHz}`,
+        `  Physics: ${EM_STATE.enabled ? 'Radial REPULSION (α < α₀)' : 'No EM force'}`,
+        ``,
+        `[SF_ZipSolver]`,
+        `  zipMode=${zipMode.toFixed(3)} (target: ${targetZipMode.toFixed(1)})`,
+        ``,
+        `[SF_DebugValidate]`,
+        `  Mode: ${debugStatus}`,
+        ``,
+        `Frame: ${frame} | dt: ${(dt*1000).toFixed(2)}ms`
+      ].join('\n');
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+    frame++;
+  } catch (err) {
+    setFatalRuntimeError(`Runtime compute/render error: ${err && err.message ? err.message : err}`);
+    rafHandle = null;
+    return;
+  }
+
+  if (!runtimeFatal) rafHandle = requestAnimationFrame(animate);
 }
 
-animate();
+if (!runtimeFatal && sysA && sysB) rafHandle = requestAnimationFrame(animate);
 
 window.DNASpineArchitecture = {
   sysA, sysB, DEBUG_STATE, EM_STATE,
