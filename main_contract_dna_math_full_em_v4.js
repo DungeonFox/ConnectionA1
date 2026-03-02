@@ -6,6 +6,7 @@ import { createPosTargetShader, createAccShader, createVelShader, createPosShade
 import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
+  createRouteStateShader,
   createCoupledPosTargetShader
 } from './coupledShadersContract_dna_math_full_em_v4.js';
 
@@ -231,13 +232,15 @@ function makeSystemA(getExtTexture) {
   }
 
   const chemVar      = gpu.addVariable('chem',      createChemShader(),             tex0);
+  const routeStateVar = gpu.addVariable('routeState', createRouteStateShader(),      tex0);
   const posTargetVar = gpu.addVariable('posTarget', createCoupledPosTargetShader(), tex0);
   const accVar       = gpu.addVariable('acc',       createAccShader(),              tex0);
   const velVar       = gpu.addVariable('vel',       createVelShader(),              tex0);
   const posVar       = gpu.addVariable('pos',       createPosShader(),              tex0);
 
   gpu.setVariableDependencies(chemVar,      [chemVar, posVar]);
-  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar]);
+  gpu.setVariableDependencies(routeStateVar,[routeStateVar, chemVar]);
+  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar, routeStateVar]);
   gpu.setVariableDependencies(accVar,       [accVar, posTargetVar, posVar, velVar]);
   gpu.setVariableDependencies(velVar,       [velVar, accVar]);
   gpu.setVariableDependencies(posVar,       [posVar, posTargetVar, velVar]);
@@ -289,6 +292,7 @@ function makeSystemA(getExtTexture) {
     pulseFrequency: { value: 6.0 },
     pulseSpeed: { value: 2.0 },
     zipMode: { value: zipMode },
+    routeState: { value: null },
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
@@ -340,6 +344,17 @@ function makeSystemA(getExtTexture) {
   const err = gpu.init();
   if (err) console.error('System A init error:', err);
 
+  routeStateVar.material.uniforms.dt = { value: 0.016 };
+  routeStateVar.material.uniforms.nodeCount = { value: NODE_COUNT };
+  routeStateVar.material.uniforms.neckSeg = { value: NECK_SEG };
+  routeStateVar.material.uniforms.headCount = { value: HEAD_COUNT };
+  routeStateVar.material.uniforms.secondEnabled = { value: SECOND_ENABLED };
+  routeStateVar.material.uniforms.flowEnabled = posTargetVar.material.uniforms.flowEnabled;
+  routeStateVar.material.uniforms.flowSpeed = posTargetVar.material.uniforms.flowSpeed;
+  routeStateVar.material.uniforms.zipMode = posTargetVar.material.uniforms.zipMode;
+
+  posTargetVar.material.uniforms.routeState.value = gpu.getCurrentRenderTarget(routeStateVar).texture;
+
   const geom = makeIndexGeometry(RENDER_COUNT);
   const mat = createPointsMaterial(TEX_SIZE, TEX_SIZE, { useNiftiColors: false }, renderer);
   mat.uniforms.atlasColorEnabled.value = true;
@@ -355,6 +370,7 @@ function makeSystemA(getExtTexture) {
   return { 
     gpu, 
     chemVar, 
+    routeStateVar,
     posTargetVar, 
     accVar, 
     velVar, 
@@ -471,6 +487,7 @@ function animate() {
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
+  sysA.routeStateVar.material.uniforms.dt.value = dt;
 
   sysA.accVar.material.uniforms.time.value = t;
   sysA.accVar.material.uniforms.dt.value = dt;
