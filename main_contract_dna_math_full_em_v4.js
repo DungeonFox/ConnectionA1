@@ -80,11 +80,40 @@ function setFatalRuntimeError(message){
   }
 }
 
+function glErrorLabel(code){
+  if (code === 0) return 'NO_ERROR';
+  if (code === 1280) return 'INVALID_ENUM';
+  if (code === 1281) return 'INVALID_VALUE';
+  if (code === 1282) return 'INVALID_OPERATION';
+  if (code === 1285) return 'OUT_OF_MEMORY';
+  if (code === 1286) return 'INVALID_FRAMEBUFFER_OPERATION';
+  return `0x${code.toString(16)}`;
+}
+
+function failIfGlError(stage){
+  const gl = renderer.getContext();
+  const err = gl.getError();
+  if (err !== gl.NO_ERROR){
+    setFatalRuntimeError(`WebGL error at ${stage}: ${glErrorLabel(err)} (${err})`);
+    return true;
+  }
+  return false;
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 1);
 document.body.appendChild(renderer.domElement);
+
+renderer.domElement.addEventListener('webglcontextlost', (event) => {
+  event.preventDefault();
+  setFatalRuntimeError('WebGL context lost. Reload the page to reinitialize GPU resources.');
+}, false);
+renderer.domElement.addEventListener('webglcontextcreationerror', (event) => {
+  const msg = event && event.statusMessage ? event.statusMessage : 'unknown';
+  setFatalRuntimeError(`WebGL context creation error: ${msg}`);
+}, false);
 
 const scene = new THREE.Scene();
 
@@ -531,6 +560,7 @@ function animate() {
   // Compute
   sysB.gpu.compute();
   sysA.gpu.compute();
+  if (failIfGlError('gpu.compute')) return;
 
   // Bind textures
   sysB.mat.uniforms.posTarget.value = sysB.gpu.getCurrentRenderTarget(sysB.posTargetVar).texture;
@@ -584,6 +614,7 @@ function animate() {
 
   controls.update();
   renderer.render(scene, camera);
+  if (failIfGlError('renderer.render')) return;
   frame++;
 }
 
