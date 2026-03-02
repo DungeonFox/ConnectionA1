@@ -288,18 +288,96 @@ export function createCoupledPosTargetShader() {
 
     // ==================== ARCHITECTURE: FT_Transport ====================
     // Parallel transport frame (rotation-minimizing Bishop frame)
+    vec3 fallbackNormal(vec3 t){
+      vec3 axis = (abs(t.y) < 0.85) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 n = cross(axis, t);
+      if (dot(n, n) < 1e-8){
+        axis = vec3(0.0, 0.0, 1.0);
+        n = cross(axis, t);
+      }
+      return normalize(n + vec3(1e-8, 0.0, 0.0));
+    }
+
+    vec3 rotateAroundAxis(vec3 v, vec3 axis, float angle){
+      float c = cos(angle);
+      float s = sin(angle);
+      return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+    }
+
     void makeFrame(vec3 t, out vec3 N, out vec3 B){
-      // Deterministic initial normal
-      vec3 up = vec3(0.0, 1.0, 0.0);
-      if (abs(dot(up, t)) > 0.92) up = vec3(1.0, 0.0, 0.0);
-      N = normalize(cross(up, t));
+      N = fallbackNormal(t);
       B = normalize(cross(t, N));
+    }
+
+    void transportFrame(vec3 TPrev, vec3 NPrev, vec3 BPrev, vec3 T, out vec3 N, out vec3 B){
+      float c = clamp(dot(TPrev, T), -1.0, 1.0);
+
+      // Low curvature segment: preserve previous frame.
+      if (c > 0.9995){
+        N = NPrev;
+        B = BPrev;
+        return;
+      }
+
+      // Near 180° tangent flip: choose a deterministic fallback axis.
+      if (c < -0.9995){
+        vec3 axis = cross(TPrev, vec3(1.0, 0.0, 0.0));
+        if (dot(axis, axis) < 1e-8) axis = cross(TPrev, vec3(0.0, 1.0, 0.0));
+        if (dot(axis, axis) < 1e-8) axis = cross(TPrev, vec3(0.0, 0.0, 1.0));
+        axis = normalize(axis + vec3(1e-8, 0.0, 0.0));
+        N = -NPrev + 2.0 * axis * dot(axis, NPrev);
+        B = -BPrev + 2.0 * axis * dot(axis, BPrev);
+        return;
+      }
+
+      vec3 v = cross(TPrev, T);
+      float s = length(v);
+      if (s < 1e-8){
+        N = NPrev;
+        B = BPrev;
+        return;
+      }
+
+      vec3 axis = v / s;
+      float angle = atan(s, c);
+      N = rotateAroundAxis(NPrev, axis, angle);
+      B = rotateAroundAxis(BPrev, axis, angle);
     }
 
     // FT_ReOrtho: Re-orthonormalize frame
     void orthonormalize(inout vec3 N, inout vec3 B, vec3 T){
       N = normalize(N - dot(N, T) * T);
       B = normalize(cross(T, N));
+    }
+
+    void getTransportedFrame(float k, out vec3 T, out vec3 N, out vec3 B, float idxStrandA0, float idxSpineP0, float perSpine, float neck){
+      vec3 p0 = readPos(k).xyz;
+      vec3 pm = readPos(max(k - 1.0, 0.0)).xyz;
+      T = normalize(p0 - pm + vec3(0.0, 0.0, 1e-6));
+      if (k < 0.5){
+        T = vec3(0.0, 0.0, 1.0);
+        makeFrame(T, N, B);
+        orthonormalize(N, B, T);
+        return;
+      }
+
+      float kp = k - 1.0;
+      vec3 pPrev = readPos(kp).xyz;
+      vec3 pPrevM = readPos(max(kp - 1.0, 0.0)).xyz;
+      vec3 TPrev = normalize(pPrev - pPrevM + vec3(0.0, 0.0, 1e-6));
+
+      vec3 aPrev = readPos(idxStrandA0 + kp).xyz;
+      float tipIdxPrev = idxSpineP0 + kp * perSpine + (neck - 1.0);
+      vec3 hubPrev = readPos(tipIdxPrev).xyz;
+
+      vec3 nSeed = aPrev - hubPrev;
+      nSeed -= dot(nSeed, TPrev) * TPrev;
+      if (dot(nSeed, nSeed) < 1e-8) nSeed = fallbackNormal(TPrev);
+      vec3 NPrev = normalize(nSeed);
+      vec3 BPrev = normalize(cross(TPrev, NPrev));
+
+      transportFrame(TPrev, NPrev, BPrev, T, N, B);
+      orthonormalize(N, B, T);
     }
 
     vec3 getWellPosition(float i){
@@ -392,12 +470,8 @@ export function createCoupledPosTargetShader() {
 
         // Get backbone frame
         vec3 p0 = readPos(k).xyz;
-        vec3 pm = readPos(max(k - 1.0, 0.0)).xyz;
-        vec3 t = normalize(p0 - pm + vec3(0.0, 0.0, 1e-6));
-        if (k < 0.5) t = vec3(0.0, 0.0, 1.0);
-        vec3 N, B;
-        makeFrame(t, N, B);
-        orthonormalize(N, B, t);
+        vec3 t, N, B;
+        getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI Helix geometry with gap-modulated radius
         float qP = qPitch;
@@ -480,12 +554,8 @@ export function createCoupledPosTargetShader() {
         meta = 5.0;
 
         vec3 p0 = readPos(k).xyz;
-        vec3 pm = readPos(max(k - 1.0, 0.0)).xyz;
-        vec3 t = normalize(p0 - pm + vec3(0.0, 0.0, 1e-6));
-        if (k < 0.5) t = vec3(0.0, 0.0, 1.0);
-        vec3 N, B;
-        makeFrame(t, N, B);
-        orthonormalize(N, B, t);
+        vec3 t, N, B;
+        getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI: Strand A with gap phase
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
@@ -523,12 +593,8 @@ export function createCoupledPosTargetShader() {
         meta = 4.0;
 
         vec3 p0 = readPos(k).xyz;
-        vec3 pm = readPos(max(k - 1.0, 0.0)).xyz;
-        vec3 t = normalize(p0 - pm + vec3(0.0, 0.0, 1e-6));
-        if (k < 0.5) t = vec3(0.0, 0.0, 1.0);
-        vec3 N, B;
-        makeFrame(t, N, B);
-        orthonormalize(N, B, t);
+        vec3 t, N, B;
+        getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI Eq. (12): Strand B with axial shift phase offset
         float qP = qPitch;
@@ -577,12 +643,8 @@ export function createCoupledPosTargetShader() {
         }
 
         vec3 p0 = readPos(kNode).xyz;
-        vec3 pm = readPos(max(kNode - 1.0, 0.0)).xyz;
-        vec3 t = normalize(p0 - pm + vec3(0.0, 0.0, 1e-6));
-        if (kNode < 0.5) t = vec3(0.0, 0.0, 1.0);
-        vec3 N, B;
-        makeFrame(t, N, B);
-        orthonormalize(N, B, t);
+        vec3 t, N, B;
+        getTransportedFrame(kNode, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI: Hub at midpoint of strands
         float qP = qPitch;
