@@ -377,7 +377,6 @@ export function createCoupledPosTargetShader() {
     uniform float pulseFrequency;
     uniform float pulseSpeed;
     uniform float zipMode;
-    uniform sampler2D routeState;
 
     // MDPI Parameters
     uniform float cotAlpha;
