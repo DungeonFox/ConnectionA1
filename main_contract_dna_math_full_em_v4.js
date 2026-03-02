@@ -254,6 +254,7 @@ function makeSystemA(getExtTexture) {
     pitch: { value: PITCH },
     qPitch: { value: Q_PITCH },
     zipMode: { value: zipMode },
+    flowEnabled: { value: 1.0 },
     extPos: { value: getExtTexture() },
     extSamples: { value: EM_STATE.enabled ? EM_STATE.samples : 0.0 },
     extRadius: { value: EM_STATE.radius },
@@ -467,6 +468,7 @@ function animate() {
   sysA.chemVar.material.uniforms.time.value = t;
   sysA.chemVar.material.uniforms.dt.value = dt;
   sysA.chemVar.material.uniforms.zipMode.value = zipMode;
+  sysA.chemVar.material.uniforms.flowEnabled.value = sysA.posTargetVar.material.uniforms.flowEnabled.value;
   
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
