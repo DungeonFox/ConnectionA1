@@ -540,6 +540,7 @@ function setFlowEnabled(enabled) {
 const validationRunner = createAcceptanceValidationRunner({
   renderer,
   sysA,
+  sysB,
   constants: window.DNASpineArchitecture?.constants || {
     TEX_SIZE, NODE_COUNT, NECK_SEG,
     HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
