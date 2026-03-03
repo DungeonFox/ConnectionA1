@@ -316,9 +316,7 @@ export function createChemShader() {
         float gapClosed = 0.0;
         float gapOpen = 1.2;
         float baseGapTarget = mix(gapOpen, gapClosed, zipMode);
-        float gapTarget = mix(baseGapTarget, gapOpen, CaShrink);
-        c.z += dt * gate * (gapTarget - c.z) * 1.25;
-        c.z = clamp(c.z, 0.0, 1.6);
+        float emUnzipPressure = 0.0;
 
         // Extra twist increment from external torque
         float torque = 0.0;
@@ -340,8 +338,16 @@ export function createChemShader() {
 
           float alphaHatNode = inferAlphaHatFromForce(dir, t);
           float qHatNode = inferQHatFromMoment(dir, t, radial, max(helixR + c.z, 1e-3), qPitch);
+          float alphaDeficit = max(alpha0 - alphaHatNode, 0.0);
+          emUnzipPressure = smoothstep(0.01, 0.35, alphaDeficit);
           torque += 0.02 * (alphaHatNode - alphaExp) + 0.01 * (qHatNode - qPitch);
+          torque += 0.03 * emUnzipPressure;
         }
+
+        float gapTarget = mix(baseGapTarget, gapOpen, clamp(CaShrink + 0.6 * emUnzipPressure, 0.0, 1.0));
+        c.z += dt * gate * (gapTarget - c.z) * (1.25 + 0.35 * emUnzipPressure);
+        c.z = clamp(c.z, 0.0, 1.6);
+
         float wTarget = 0.15 * torque;
         c.w += dt * gate * (wTarget - c.w) * 0.9;
         c.w *= exp(-dt * 0.35);

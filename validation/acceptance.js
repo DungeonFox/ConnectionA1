@@ -110,6 +110,10 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   let conventionWindingChecks = 0;
   let conventionWindingPass = 0;
   let gapSum = 0;
+  let alphaBelowCount = 0;
+  let alphaAboveCount = 0;
+  let alphaBelowGapSum = 0;
+  let alphaAboveGapSum = 0;
   const qHatFxMxSamples = [];
   const qHatPitchScaledSamples = [];
 
@@ -129,6 +133,17 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     const g = chem[0];
     const phi = chem[1];
     const gGap = chem[2];
+    const tipIdx = idxSpineP0 + k * perSpine + (NECK_SEG - 1);
+    const tipAlphaHat = chemPixels[tipIdx * 4 + 1];
+    if (Number.isFinite(alphaCalibration?.alpha0Solved) && Number.isFinite(tipAlphaHat)) {
+      if (tipAlphaHat < alphaCalibration.alpha0Solved) {
+        alphaBelowCount += 1;
+        alphaBelowGapSum += gGap;
+      } else {
+        alphaAboveCount += 1;
+        alphaAboveGapSum += gGap;
+      }
+    }
 
     if (g <= 0.05) continue;
     activeNodes++;
@@ -359,6 +374,16 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     (meanGap >= 0.0 && meanGap <= 1.25)
   );
 
+  const alphaBelowGapMean = alphaBelowCount > 0 ? alphaBelowGapSum / alphaBelowCount : null;
+  const alphaAboveGapMean = alphaAboveCount > 0 ? alphaAboveGapSum / alphaAboveCount : null;
+  const alphaGapCouplingMinSamples = criteria?.alpha0GapCouplingMinSamples ?? 6;
+  const alphaGapCouplingMinDelta = criteria?.alpha0GapCouplingMinDelta ?? 2e-2;
+  const alphaGapCouplingHasSignal = alphaBelowCount >= alphaGapCouplingMinSamples && alphaAboveCount >= alphaGapCouplingMinSamples;
+  const alphaGapDelta = (alphaBelowGapMean !== null && alphaAboveGapMean !== null)
+    ? (alphaBelowGapMean - alphaAboveGapMean)
+    : null;
+  const alphaGapCouplingPass = !emEnabled || !alphaGapCouplingHasSignal || (alphaGapDelta >= alphaGapCouplingMinDelta);
+
   const alpha0ResidualAbs = Number.isFinite(alphaCalibration?.residualAtAlpha0)
     ? Math.abs(alphaCalibration.residualAtAlpha0)
     : Number.POSITIVE_INFINITY;
@@ -464,6 +489,23 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
         max: alphaCalibration?.maxAlpha ?? null
       },
       source: 'runtime alpha scan solver using force-direction projection and radial frame proxy F_r(alpha)=0'
+    },
+    alpha0GapCoupling: {
+      pass: alphaGapCouplingPass ? 1 : 0,
+      total: 1,
+      ratio: alphaGapCouplingPass ? 1 : 0,
+      thresholdMinSamples: alphaGapCouplingMinSamples,
+      thresholdGapDeltaMin: alphaGapCouplingMinDelta,
+      alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      belowCount: alphaBelowCount,
+      aboveCount: alphaAboveCount,
+      belowGapMean: alphaBelowGapMean,
+      aboveGapMean: alphaAboveGapMean,
+      gapDelta: alphaGapDelta,
+      hasSignal: alphaGapCouplingHasSignal,
+      emEnabled,
+      skipped: !emEnabled || !alphaGapCouplingHasSignal,
+      source: 'checks physical influence: nodes with alphaHat<alpha0 should exhibit larger mean gap'
     }
   };
 
@@ -525,7 +567,9 @@ export function createAcceptanceValidationRunner(config) {
         conventionMinSamples: 12,
         conventionRequiredRatio: 6.5e-1,
         alpha0ResidualAbsMax: 1e-2,
-        alpha0MinSamples: 8
+        alpha0MinSamples: 8,
+        alpha0GapCouplingMinSamples: 6,
+        alpha0GapCouplingMinDelta: 2e-2
       }
     }
   };
