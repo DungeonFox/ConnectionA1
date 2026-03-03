@@ -90,6 +90,24 @@ export function createChemShader() {
       return clamp(Ca, 0.0, 1.2);
     }
 
+    // Infer α from force-component ratio (Eq. 19 / Eq. 24 form)
+    // α_hat ≈ atan(|F_parallel| / |F_perp|)
+    float inferAlphaHatFromForce(vec3 forceDir, vec3 tangent){
+      float fParallel = abs(dot(forceDir, tangent));
+      float fPerp = length(forceDir - dot(forceDir, tangent) * tangent);
+      return atan(fParallel, max(fPerp, 1e-6));
+    }
+
+    // Infer q from force-moment ratio (Eq. 22 / Eq. 34 / Eq. 50 form)
+    // q_hat ∝ (M_t / (F_parallel * R^2)), where M_t = (r × F)·t
+    float inferQHatFromMoment(vec3 forceDir, vec3 tangent, vec3 radial, float R, float qRef){
+      float fParallel = abs(dot(forceDir, tangent));
+      float momentT = dot(cross(radial, forceDir), tangent);
+      float qMag = abs(momentT) / max(fParallel * R * R, 1e-6);
+      float qSign = (qRef >= 0.0) ? 1.0 : -1.0;
+      return qSign * qMag;
+    }
+
     // ==================== ARCHITECTURE: SD_Bimodal ====================
     // Map Ca to growth/zip pressure using bell-shaped rule
     // Moderate Ca (0.12-0.55) promotes growth/stability
@@ -256,9 +274,20 @@ export function createChemShader() {
           vec3 pm = readPos(k - 1.0).xyz;
           vec3 pp = readPos(min(k + 1.0, N - 1.0)).xyz;
           vec3 t = normalize(pp - pm + vec3(1e-6));
+
+          float tipIdxP = idxSpineP0 + k * perSpine + (neck - 1.0);
+          vec3 hub = readPos(tipIdxP).xyz;
+          vec3 radial = p0 - hub;
+          float rLen = length(radial);
+          radial = (rLen > 1e-6) ? (radial / rLen) : vec3(1.0, 0.0, 0.0);
+
           vec4 ne = nearestExt(p0, k * 37.7 + 11.0);
           vec3 dir = ne.yzw;
           torque = dot(cross(t, dir), t);
+
+          float alphaHatNode = inferAlphaHatFromForce(dir, t);
+          float qHatNode = inferQHatFromMoment(dir, t, radial, max(helixR + c.z, 1e-3), qPitch);
+          torque += 0.02 * (alphaHatNode - alphaExp) + 0.01 * (qHatNode - qPitch);
         }
         float wTarget = 0.15 * torque;
         c.w += dt * gate * (wTarget - c.w) * 0.9;
@@ -308,9 +337,17 @@ export function createChemShader() {
       if (isTip > 0.5){
         vec3 p = texture2D(pos, gl_FragCoord.xy / resolution.xy).xyz;
 
+        vec3 pm = readPos(max(kNode - 1.0, 0.0)).xyz;
+        vec3 pp = readPos(min(kNode + 1.0, N - 1.0)).xyz;
+        vec3 t = normalize(pp - pm + vec3(1e-6));
+        vec3 radial = p - readPos(kNode).xyz;
+        float radialLen = length(radial);
+        radial = (radialLen > 1e-6) ? (radial / radialLen) : vec3(1.0, 0.0, 0.0);
+
         // SD_Compartment: Calcium influx from external proximity
         vec4 ne = nearestExt(p, i * 13.1 + 7.0);
         float d = ne.x;
+        vec3 forceDir = ne.yzw;
         float inflow = 1.0 - smoothstep(extRadius * 0.35, extRadius, d);
         inflow *= step(0.5, extSamples);
 
@@ -319,8 +356,14 @@ export function createChemShader() {
 
         // Update calcium ODE
         float Ca = updateCalcium(c.x, CaDend, inflow, dt);
+
+        float alphaHat = inferAlphaHatFromForce(forceDir, t);
+        float qHat = inferQHatFromMoment(forceDir, t, radial, max(helixR + readChem(kNode).z, 1e-3), qPitch);
+
+        float deltaAlpha = alphaHat - alphaExp;
+        float deltaQ = qHat - qPitch;
         
-        gl_FragColor = vec4(Ca, c.y, c.z, c.w);
+        gl_FragColor = vec4(Ca, alphaHat, qHat, clamp(deltaAlpha, -3.14159, 3.14159) + 0.25 * clamp(deltaQ, -8.0, 8.0));
         return;
       }
 

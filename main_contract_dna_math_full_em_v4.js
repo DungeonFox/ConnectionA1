@@ -67,6 +67,64 @@ const DEBUG_STATE = {
   showEMField: false  // NEW: Visualize EM field
 };
 
+const RESIDUAL_STATE = {
+  sampleEveryNFrames: 12,
+  lastFrame: -1,
+  sampleCount: 0,
+  meanDeltaAlpha: 0,
+  meanAbsDeltaAlpha: 0,
+  rmsDeltaAlpha: 0,
+  meanDeltaQ: 0,
+  meanAbsDeltaQ: 0,
+  rmsDeltaQ: 0,
+  sampledNodes: 0
+};
+
+const chemReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
+
+function updateResidualMetrics() {
+  if ((frame % RESIDUAL_STATE.sampleEveryNFrames) !== 0) return;
+  const rt = sysA.gpu.getCurrentRenderTarget(sysA.chemVar);
+  renderer.readRenderTargetPixels(rt, 0, 0, TEX_SIZE, TEX_SIZE, chemReadbackBuffer);
+
+  const idxSpineP0 = NODE_COUNT + 2 * NODE_COUNT;
+  let count = 0;
+  let sumAlpha = 0;
+  let sumAbsAlpha = 0;
+  let sumSqAlpha = 0;
+  let sumQ = 0;
+  let sumAbsQ = 0;
+  let sumSqQ = 0;
+
+  for (let k = 0; k < NODE_COUNT; k++) {
+    const i = idxSpineP0 + k * PER_SPINE + (NECK_SEG - 1);
+    const i4 = i * 4;
+    const alphaHat = chemReadbackBuffer[i4 + 1];
+    const qHat = chemReadbackBuffer[i4 + 2];
+    if (!Number.isFinite(alphaHat) || !Number.isFinite(qHat)) continue;
+    const deltaAlpha = alphaHat - ALPHA_EXP;
+    const deltaQ = qHat - Q_PITCH;
+    sumAlpha += deltaAlpha;
+    sumAbsAlpha += Math.abs(deltaAlpha);
+    sumSqAlpha += deltaAlpha * deltaAlpha;
+    sumQ += deltaQ;
+    sumAbsQ += Math.abs(deltaQ);
+    sumSqQ += deltaQ * deltaQ;
+    count += 1;
+  }
+
+  if (count === 0) return;
+  RESIDUAL_STATE.lastFrame = frame;
+  RESIDUAL_STATE.sampleCount += 1;
+  RESIDUAL_STATE.sampledNodes = count;
+  RESIDUAL_STATE.meanDeltaAlpha = sumAlpha / count;
+  RESIDUAL_STATE.meanAbsDeltaAlpha = sumAbsAlpha / count;
+  RESIDUAL_STATE.rmsDeltaAlpha = Math.sqrt(sumSqAlpha / count);
+  RESIDUAL_STATE.meanDeltaQ = sumQ / count;
+  RESIDUAL_STATE.meanAbsDeltaQ = sumAbsQ / count;
+  RESIDUAL_STATE.rmsDeltaQ = Math.sqrt(sumSqQ / count);
+}
+
 const hud = document.getElementById('hud');
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -550,6 +608,7 @@ function animate() {
   sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
 
   validationRunner.update();
+  updateResidualMetrics();
 
   // Debug uniforms
   if (sysA.mat.uniforms.showZipField) sysA.mat.uniforms.showZipField.value = DEBUG_STATE.showZipField;
@@ -585,6 +644,11 @@ function animate() {
       `[SF_DebugValidate]`,
       `  Mode: ${debugStatus}`,
       ``,
+      `[Residual Inference]`,
+      `  nodes=${RESIDUAL_STATE.sampledNodes} sample#=${RESIDUAL_STATE.sampleCount} (frame ${RESIDUAL_STATE.lastFrame})`,
+      `  Δα mean=${(RESIDUAL_STATE.meanDeltaAlpha * 180 / Math.PI).toFixed(3)}° | |Δα| mean=${(RESIDUAL_STATE.meanAbsDeltaAlpha * 180 / Math.PI).toFixed(3)}° | rms=${(RESIDUAL_STATE.rmsDeltaAlpha * 180 / Math.PI).toFixed(3)}°`,
+      `  Δq mean=${RESIDUAL_STATE.meanDeltaQ.toFixed(5)} | |Δq| mean=${RESIDUAL_STATE.meanAbsDeltaQ.toFixed(5)} | rms=${RESIDUAL_STATE.rmsDeltaQ.toFixed(5)}`,
+      ``,
       `[Validation]`,
       `  status=${validationRunner.getHudSummary().status} ` +
       `(${validationRunner.getHudSummary().passed}/${validationRunner.getHudSummary().total} pass, ` +
@@ -603,7 +667,8 @@ function animate() {
 animate();
 
 window.DNASpineArchitecture = {
-  sysA, sysB, DEBUG_STATE, EM_STATE, validationRunner,
+  sysA, sysB, DEBUG_STATE, EM_STATE, RESIDUAL_STATE, validationRunner,
+  getResidualMetrics: () => ({ ...RESIDUAL_STATE }),
   constants: {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
