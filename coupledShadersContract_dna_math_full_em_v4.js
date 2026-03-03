@@ -80,6 +80,11 @@ export function createChemShader() {
     uniform sampler2D extPos;
     uniform float extSamples;
     uniform float extRadius;
+    uniform float seekWDistance;
+    uniform float seekWTangent;
+    uniform float seekWRadial;
+    uniform float seekWTorque;
+    uniform float seekMaxInfluence;
 
     // MDPI Helix Parameters
     uniform float helixR;
@@ -325,8 +330,9 @@ export function createChemShader() {
         float baseGapTarget = mix(gapOpen, gapClosed, zipMode);
         float emUnzipPressure = 0.0;
 
-        // Extra twist increment from external torque
-        float torque = 0.0;
+        // Seek-policy influences split into explicit components.
+        float blendedInfluence = 0.0;
+        float torqueAssist = 0.0;
         if (extSamples > 0.5){
           vec3 p0 = readPos(k).xyz;
           vec3 pm = readPos(k - 1.0).xyz;
@@ -340,22 +346,40 @@ export function createChemShader() {
           radial = (rLen > 1e-6) ? (radial / rLen) : vec3(1.0, 0.0, 0.0);
 
           vec4 ne = nearestExt(p0, k * 37.7 + 11.0);
+          float dExt = ne.x;
           vec3 dir = ne.yzw;
-          torque = dot(cross(t, dir), t);
+          float seekNear = 1.0 - smoothstep(extRadius * 0.35, extRadius, dExt);
+
+          float distanceTerm = dot(dir, t);
+          float tangentTerm = sign(dot(dir, t)) * (1.0 - abs(dot(dir, t)));
+          float radialTerm = dot(dir, radial);
+          float torqueTerm = dot(cross(radial, dir), t);
+
+          float seekWTotal = max(seekWDistance + seekWTangent + seekWRadial + seekWTorque, 1e-6);
+          float seekBlendRaw = (
+            seekWDistance * distanceTerm +
+            seekWTangent * tangentTerm +
+            seekWRadial * radialTerm +
+            seekWTorque * torqueTerm
+          ) / seekWTotal;
+          blendedInfluence = clamp(seekBlendRaw * seekNear, -seekMaxInfluence, seekMaxInfluence);
+          torqueAssist = clamp(torqueTerm * seekNear, -seekMaxInfluence, seekMaxInfluence);
 
           float alphaHatNode = inferAlphaHatFromForce(dir, t);
           float qHatNode = inferQHatFromMoment(dir, t, radial, max(helixR + c.z, 1e-3), qPitch);
           float alphaDeficit = max(alpha0 - alphaHatNode, 0.0);
           emUnzipPressure = smoothstep(0.01, 0.35, alphaDeficit);
-          torque += 0.02 * (alphaHatNode - alphaExp) + 0.01 * (qHatNode - qPitch);
-          torque += 0.03 * emUnzipPressure;
+          emUnzipPressure = clamp(emUnzipPressure + 0.12 * max(-blendedInfluence, 0.0), 0.0, 1.0);
+
+          float phaseAssist = 0.02 * (alphaHatNode - alphaExp) + 0.01 * (qHatNode - qPitch);
+          torqueAssist += phaseAssist + 0.03 * emUnzipPressure;
         }
 
         float gapTarget = mix(baseGapTarget, gapOpen, clamp(CaShrink + 0.6 * emUnzipPressure, 0.0, 1.0));
         c.z += dt * gate * (gapTarget - c.z) * (1.25 + 0.35 * emUnzipPressure);
         c.z = clamp(c.z, 0.0, 1.6);
 
-        float wTarget = 0.15 * torque;
+        float wTarget = 0.15 * torqueAssist + 0.10 * blendedInfluence;
         c.w += dt * gate * (wTarget - c.w) * 0.9;
         c.w *= exp(-dt * 0.35);
         c.w = clamp(c.w, -0.25, 0.25);
@@ -466,6 +490,11 @@ export function createCoupledPosTargetShader() {
     uniform sampler2D extPos;
     uniform float extSamples;
     uniform float extRadius;
+    uniform float seekWDistance;
+    uniform float seekWTangent;
+    uniform float seekWRadial;
+    uniform float seekWTorque;
+    uniform float seekMaxInfluence;
 
     uniform vec3 wellOrigin;
     uniform vec3 unusedOffset;
@@ -496,6 +525,27 @@ export function createCoupledPosTargetShader() {
 
     vec4 readPos(float idx){ return texture2D(pos, uvFromIndex(idx)); }
     vec4 readChem(float idx){ return texture2D(chem, uvFromIndex(idx)); }
+
+    vec4 nearestExt(vec3 p, float seed){
+      float dMin = 1e9;
+      vec3 dir = vec3(0.0, 0.0, 1.0);
+      for (int k = 0; k < 32; k++){
+        if (float(k) >= extSamples) break;
+        float a = hash12(vec2(seed + float(k) * 19.13, 13.37 + time * 0.0007));
+        float b = hash12(vec2(seed + float(k) * 91.17, 42.42 + time * 0.0009));
+        vec2 ruv = vec2(a, b);
+        vec4 q4 = texture2D(extPos, ruv);
+        float qUsed = step(0.5, floor(q4.w + 1e-4));
+        if (qUsed < 0.5) continue;
+        vec3 dq = q4.xyz - p;
+        float d = length(dq);
+        if (d < dMin){
+          dMin = d;
+          dir = dq / max(d, 1e-6);
+        }
+      }
+      return vec4(dMin, dir);
+    }
 
     // ==================== ARCHITECTURE: FT_Transport ====================
     // Parallel transport frame (rotation-minimizing Bishop frame)
@@ -746,11 +796,41 @@ export function createCoupledPosTargetShader() {
           return;
         }
 
-        // Forward growth along tangent
+        // Forward growth using weighted seek-policy blending.
         vec3 pPrev = readPos(k - 1.0).xyz;
         vec3 pPrev2 = readPos(max(k - 2.0, 0.0)).xyz;
         vec3 t = normalize(pPrev - pPrev2 + vec3(0.0, 0.0, 1e-4));
-        outPos = pPrev + t * ds;
+
+        vec3 seekDir = t;
+        if (extSamples > 0.5){
+          vec4 ne = nearestExt(pPrev, k * 31.7 + 17.0);
+          float dExt = ne.x;
+          vec3 dir = ne.yzw;
+          float seekNear = 1.0 - smoothstep(extRadius * 0.35, extRadius, dExt);
+
+          float dotT = dot(dir, t);
+          vec3 tangentComp = dotT * t;
+          vec3 radialComp = dir - tangentComp;
+          float rLen = length(radialComp);
+          vec3 radialAxis = (rLen > 1e-6) ? (radialComp / rLen) : vec3(1.0, 0.0, 0.0);
+          vec3 tangentAxis = (abs(dotT) > 1e-4) ? sign(dotT) * t : t;
+          vec3 phaseAxis = normalize(cross(cross(t, radialAxis), t) + vec3(1e-6, 0.0, 0.0));
+          vec3 torqueAxis = normalize(cross(t, radialAxis) + vec3(1e-6, 0.0, 0.0));
+
+          vec3 weighted =
+            seekWDistance * dir +
+            seekWTangent * tangentAxis +
+            seekWRadial * phaseAxis +
+            seekWTorque * torqueAxis;
+          float totalW = max(seekWDistance + seekWTangent + seekWRadial + abs(seekWTorque), 1e-6);
+          vec3 blended = weighted / totalW;
+          float blendLen = length(blended);
+          if (blendLen > 1e-6){
+            seekDir = normalize(mix(t, blended / blendLen, clamp(seekNear, 0.0, seekMaxInfluence)));
+          }
+        }
+
+        outPos = pPrev + seekDir * ds;
         gl_FragColor = vec4(outPos, membership + meta/256.0);
         return;
       }
