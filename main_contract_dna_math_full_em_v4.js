@@ -44,6 +44,13 @@ const ALPHA_EXP = Math.atan(PITCH / (2.0 * Math.PI * HELIX_R));
 const U_S = 0.5 * COT_ALPHA;
 const ALPHA_0 = 38.0 * Math.PI / 180.0;
 
+const HELIX_CONVENTION = Object.freeze({
+  handednessSign: 1.0,
+  strandAPhaseOffset: 0.5 * Math.PI,
+  strandBPhaseOffset: 1.5 * Math.PI,
+  angleUnitScale: 1.0 // radians
+});
+
 // ==================== ARCHITECTURE: EM FIELD CONTROLS ====================
 // EM (Electromagnetic) field state
 const EM_STATE = {
@@ -321,7 +328,11 @@ function makeSystemA(getExtTexture) {
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
-    alpha0: { value: ALPHA_0 }
+    alpha0: { value: ALPHA_0 },
+    helixHandednessSign: { value: HELIX_CONVENTION.handednessSign },
+    strandAPhaseOffset: { value: HELIX_CONVENTION.strandAPhaseOffset },
+    strandBPhaseOffset: { value: HELIX_CONVENTION.strandBPhaseOffset },
+    angleUnitScale: { value: HELIX_CONVENTION.angleUnitScale }
   });
 
   // PosTarget uniforms
@@ -352,7 +363,11 @@ function makeSystemA(getExtTexture) {
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
-    alpha0: { value: ALPHA_0 }
+    alpha0: { value: ALPHA_0 },
+    helixHandednessSign: { value: HELIX_CONVENTION.handednessSign },
+    strandAPhaseOffset: { value: HELIX_CONVENTION.strandAPhaseOffset },
+    strandBPhaseOffset: { value: HELIX_CONVENTION.strandBPhaseOffset },
+    angleUnitScale: { value: HELIX_CONVENTION.angleUnitScale }
   });
 
   // ==================== EM FIELD IN ACC SHADER ====================
@@ -425,7 +440,8 @@ function makeSystemA(getExtTexture) {
       NODE_COUNT, NECK_SEG, HEAD_COUNT, 
       IDX_RUNG0, RUNG_COUNT, RENDER_COUNT,
       HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
-      COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0
+      COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+      HELIX_CONVENTION
     }
   };
 }
@@ -545,6 +561,7 @@ const validationRunner = createAcceptanceValidationRunner({
     TEX_SIZE, NODE_COUNT, NECK_SEG,
     HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
     COT_ALPHA, ALPHA_EXP, U_S,
+    HELIX_CONVENTION,
     DS, IDX_RUNG0
   },
   emState: EM_STATE,
@@ -677,7 +694,8 @@ window.DNASpineArchitecture = {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
     HELIX_R, PITCH, AXIAL_SHIFT, DS,
-    Q_PITCH, COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0
+    Q_PITCH, COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+    HELIX_CONVENTION
   }
 };
 

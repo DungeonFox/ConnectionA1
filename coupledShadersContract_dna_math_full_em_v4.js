@@ -38,6 +38,10 @@ export function createChemShader() {
     uniform float alphaExp;
     uniform float u_s;
     uniform float alpha0;
+    uniform float helixHandednessSign;
+    uniform float strandAPhaseOffset;
+    uniform float strandBPhaseOffset;
+    uniform float angleUnitScale;
 
     vec2 uvFromIndex(float idx){
       float x = mod(idx, resolution.x);
@@ -295,7 +299,7 @@ export function createChemShader() {
         c.w = clamp(c.w, -0.25, 0.25);
 
         // Helix phase propagation: φ_k = φ_{k-1} + q*ds + gRot
-        float dphi = qPitch * ds + c.w;
+        float dphi = helixHandednessSign * qPitch * ds * angleUnitScale + c.w;
         c.y = mod(cPrev.y + dphi, 2.0 * PI);
 
         gl_FragColor = c;
@@ -415,6 +419,10 @@ export function createCoupledPosTargetShader() {
     uniform float alphaExp;
     uniform float u_s;
     uniform float alpha0;
+    uniform float helixHandednessSign;
+    uniform float strandAPhaseOffset;
+    uniform float strandBPhaseOffset;
+    uniform float angleUnitScale;
 
     vec2 uvFromIndex(float idx){
       float x = mod(idx, resolution.x);
@@ -609,7 +617,7 @@ export function createCoupledPosTargetShader() {
         getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI Helix geometry with gap-modulated radius
-        float qP = qPitch;
+        float qP = helixHandednessSign * qPitch * angleUnitScale;
         float phi = ck.y;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
@@ -618,8 +626,8 @@ export function createCoupledPosTargetShader() {
         float dThetaAxial = qP * axialShift;
 
         // MDPI Eq. (12): Strand A and B with phase offset
-        float phiA = phi - 0.5 * gapPhase;
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiA = phi + strandAPhaseOffset - 0.5 * gapPhase;
+        float phiB = phi + strandBPhaseOffset + dThetaAxial + 0.5 * gapPhase;
 
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 baseB = p0 + 0.5 * t * axialShift;
@@ -695,7 +703,7 @@ export function createCoupledPosTargetShader() {
         // MDPI: Strand A with gap phase
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float phiA = phi - 0.5 * gapPhase;
+        float phiA = phi + strandAPhaseOffset - 0.5 * gapPhase;
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 dest = baseA + R * (cos(phiA) * N + sin(phiA) * B);
 
@@ -731,12 +739,12 @@ export function createCoupledPosTargetShader() {
         getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI Eq. (12): Strand B with axial shift phase offset
-        float qP = qPitch;
+        float qP = helixHandednessSign * qPitch * angleUnitScale;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
         float dThetaAxial = qP * axialShift;
 
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiB = phi + strandBPhaseOffset + dThetaAxial + 0.5 * gapPhase;
         vec3 baseB = p0 + 0.5 * t * axialShift;
         vec3 dest = baseB + R * (cos(phiB) * N + sin(phiB) * B);
 
@@ -780,13 +788,13 @@ export function createCoupledPosTargetShader() {
         getTransportedFrame(kNode, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI: Hub at midpoint of strands
-        float qP = qPitch;
+        float qP = helixHandednessSign * qPitch * angleUnitScale;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
         float dThetaAxial = qP * axialShift;
 
-        float phiA = phi - 0.5 * gapPhase;
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiA = phi + strandAPhaseOffset - 0.5 * gapPhase;
+        float phiB = phi + strandBPhaseOffset + dThetaAxial + 0.5 * gapPhase;
 
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 baseB = p0 + 0.5 * t * axialShift;
