@@ -342,7 +342,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     ? topologyMinRatioUnzipped
     : topologyMinRatioZipped;
   const conventionRequiredRatio = criteria?.conventionRequiredRatio ?? 6.5e-1;
-  const conventionMinSamples = criteria?.conventionMinSamples ?? 8;
+  const conventionMinSamples = criteria?.conventionMinSamples ?? 12;
   const hasConventionSignal = conventionPhaseChecks >= conventionMinSamples && conventionWindingChecks >= conventionMinSamples;
   const conventionPhaseRatio = conventionPhaseChecks ? conventionPhasePass / conventionPhaseChecks : null;
   const conventionWindingRatio = conventionWindingChecks ? conventionWindingPass / conventionWindingChecks : null;
@@ -492,7 +492,7 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
         mdpiQBacksolveMinSamples: 10,
         conventionPhaseOffsetAbsErrMax: 3.5e-1,
-        conventionMinSamples: 8,
+        conventionMinSamples: 12,
         conventionRequiredRatio: 6.5e-1
       }
     }
