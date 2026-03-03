@@ -127,6 +127,20 @@
       <button id="seek-clear-targets" type="button">Clear</button>
       <span id="seek-target-readout">targets: 0</span>
     </div>
+
+    <label class="row">
+      <span>Manual target XYZ</span>
+      <div class="inline">
+        <input id="seek-targetX" type="number" step="0.1" value="0" aria-label="target x" style="width:32%" />
+        <input id="seek-targetY" type="number" step="0.1" value="0" aria-label="target y" style="width:32%" />
+        <input id="seek-targetZ" type="number" step="0.1" value="0" aria-label="target z" style="width:32%" />
+      </div>
+    </label>
+    <div class="inline">
+      <button id="seek-apply-manual-target" type="button">Add XYZ target</button>
+      <span id="seek-manual-status">manual: idle</span>
+    </div>
+
   </section>
   <script type="module" src="./main_contract_dna_math_full_em_v4.js"></script>
 </body>

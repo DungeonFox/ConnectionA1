@@ -321,6 +321,11 @@ const seekTargetModeSelect = document.getElementById('seek-target-mode');
 const seekArmPickButton = document.getElementById('seek-arm-pick');
 const seekClearTargetsButton = document.getElementById('seek-clear-targets');
 const seekTargetReadout = document.getElementById('seek-target-readout');
+const seekTargetXInput = document.getElementById('seek-targetX');
+const seekTargetYInput = document.getElementById('seek-targetY');
+const seekTargetZInput = document.getElementById('seek-targetZ');
+const seekApplyManualTargetButton = document.getElementById('seek-apply-manual-target');
+const seekManualStatus = document.getElementById('seek-manual-status');
 
 const seekControls = {
   seekStrength: document.getElementById('seek-seekStrength'),
@@ -357,6 +362,7 @@ function syncSeekPanelFromState() {
     const armedText = SEEK_TARGET_STATE.armed ? ' | ARMED' : '';
     seekTargetReadout.textContent = `targets: ${SEEK_TARGET_STATE.targets.length}${armedText}`;
   }
+  if (seekManualStatus) seekManualStatus.textContent = SEEK_TARGET_STATE.mode === 'off' ? 'manual: mode off' : 'manual: ready';
 }
 
 function applySeekPreset(modeName) {
@@ -380,10 +386,11 @@ function deriveSeekPolicyUniforms() {
 
 
 function projectPointToScreen(point, cameraRef, canvas) {
+  const rect = canvas.getBoundingClientRect();
   const v = new THREE.Vector3(point[0], point[1], point[2]).project(cameraRef);
   return {
-    x: (v.x * 0.5 + 0.5) * canvas.clientWidth,
-    y: (-v.y * 0.5 + 0.5) * canvas.clientHeight,
+    x: (v.x * 0.5 + 0.5) * rect.width,
+    y: (v.y * 0.5 + 0.5) * rect.height,
     z: v.z
   };
 }
@@ -408,6 +415,20 @@ function updateSeekTargetUniforms() {
     }
     uniforms.seekTargetRadii.needsUpdate = true;
   }
+}
+
+
+function addSeekTarget(target) {
+  if (SEEK_TARGET_STATE.mode === 'off') SEEK_TARGET_STATE.mode = 'single';
+  if (SEEK_TARGET_STATE.mode === 'single') {
+    SEEK_TARGET_STATE.targets = [target];
+  } else {
+    SEEK_TARGET_STATE.targets.push(target);
+    if (SEEK_TARGET_STATE.targets.length > MAX_SEEK_TARGETS) SEEK_TARGET_STATE.targets.shift();
+  }
+  SEEK_TARGET_STATE.armed = false;
+  syncSeekPanelFromState();
+  updateSeekTargetUniforms();
 }
 
 function pickSeekTargetFromClick(event) {
@@ -441,15 +462,7 @@ function pickSeekTargetFromClick(event) {
 
   if (!best) return;
   const newTarget = { x: best[0], y: best[1], z: best[2], radius: SEEK_TARGET_STATE.targetRadius, weight: SEEK_TARGET_STATE.targetWeight };
-  if (SEEK_TARGET_STATE.mode === 'single') {
-    SEEK_TARGET_STATE.targets = [newTarget];
-  } else {
-    SEEK_TARGET_STATE.targets.push(newTarget);
-    if (SEEK_TARGET_STATE.targets.length > MAX_SEEK_TARGETS) SEEK_TARGET_STATE.targets.shift();
-  }
-  SEEK_TARGET_STATE.armed = false;
-  syncSeekPanelFromState();
-  updateSeekTargetUniforms();
+  addSeekTarget(newTarget);
 }
 
 function applySeekStateToUniforms() {
@@ -537,6 +550,20 @@ function setupSeekPanelBindings() {
       SEEK_TARGET_STATE.armed = false;
       syncSeekPanelFromState();
       updateSeekTargetUniforms();
+    });
+  }
+
+  if (seekApplyManualTargetButton) {
+    seekApplyManualTargetButton.addEventListener('click', () => {
+      const x = Number(seekTargetXInput?.value ?? 0);
+      const y = Number(seekTargetYInput?.value ?? 0);
+      const z = Number(seekTargetZInput?.value ?? 0);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        if (seekManualStatus) seekManualStatus.textContent = 'manual: invalid XYZ';
+        return;
+      }
+      addSeekTarget({ x, y, z, radius: SEEK_TARGET_STATE.targetRadius, weight: SEEK_TARGET_STATE.targetWeight });
+      if (seekManualStatus) seekManualStatus.textContent = `manual: added (${x.toFixed(2)}, ${y.toFixed(2)}, ${z.toFixed(2)})`;
     });
   }
 
