@@ -66,6 +66,18 @@ const EM_STATE = {
   samples: 16.0           // extSamples - EM field samples
 };
 
+const SEEK_MODE_PRESETS = Object.freeze({
+  manual: { seekStrength: 1.0, captureRadius: 15.0, torqueBias: 0.5, phaseLock: 0.25, damping: 1.0 },
+  assist: { seekStrength: 0.8, captureRadius: 12.0, torqueBias: 0.35, phaseLock: 0.35, damping: 0.9 },
+  aggressive: { seekStrength: 1.8, captureRadius: 20.0, torqueBias: 0.7, phaseLock: 0.2, damping: 0.55 },
+  precision: { seekStrength: 0.6, captureRadius: 9.0, torqueBias: 0.2, phaseLock: 0.75, damping: 1.3 }
+});
+
+const SEEK_MODE_STATE = {
+  mode: 'manual',
+  ...SEEK_MODE_PRESETS.manual
+};
+
 let zipMode = 1.0;
 let targetZipMode = 1.0;
 
@@ -282,6 +294,95 @@ function updateResidualMetrics() {
 }
 
 const hud = document.getElementById('hud');
+const seekPanel = document.getElementById('seek-panel');
+const seekModeSelect = document.getElementById('seek-mode');
+const seekModeReadout = document.getElementById('seek-mode-readout');
+const seekResetButton = document.getElementById('seek-reset');
+
+const seekControls = {
+  seekStrength: document.getElementById('seek-seekStrength'),
+  captureRadius: document.getElementById('seek-captureRadius'),
+  torqueBias: document.getElementById('seek-torqueBias'),
+  phaseLock: document.getElementById('seek-phaseLock'),
+  damping: document.getElementById('seek-damping')
+};
+
+const seekValueLabels = {
+  seekStrength: document.getElementById('seek-val-seekStrength'),
+  captureRadius: document.getElementById('seek-val-captureRadius'),
+  torqueBias: document.getElementById('seek-val-torqueBias'),
+  phaseLock: document.getElementById('seek-val-phaseLock'),
+  damping: document.getElementById('seek-val-damping')
+};
+
+function syncSeekPanelFromState() {
+  if (seekModeSelect) seekModeSelect.value = SEEK_MODE_STATE.mode;
+  for (const key of Object.keys(seekControls)) {
+    const control = seekControls[key];
+    if (!control) continue;
+    control.value = String(SEEK_MODE_STATE[key]);
+    if (seekValueLabels[key]) seekValueLabels[key].textContent = Number(SEEK_MODE_STATE[key]).toFixed(2);
+  }
+  if (seekModeReadout) seekModeReadout.textContent = `mode: ${SEEK_MODE_STATE.mode}`;
+}
+
+function applySeekPreset(modeName) {
+  const preset = SEEK_MODE_PRESETS[modeName] ?? SEEK_MODE_PRESETS.manual;
+  SEEK_MODE_STATE.mode = modeName in SEEK_MODE_PRESETS ? modeName : 'manual';
+  Object.assign(SEEK_MODE_STATE, preset);
+  syncSeekPanelFromState();
+}
+
+function applySeekStateToUniforms() {
+  EM_STATE.k = 50.0 * SEEK_MODE_STATE.seekStrength;
+  EM_STATE.radius = SEEK_MODE_STATE.captureRadius;
+  EM_STATE.twist = SEEK_MODE_STATE.torqueBias;
+  EM_STATE.twistHz = 0.25 + SEEK_MODE_STATE.phaseLock * 3.75;
+  EM_STATE.c = 10.0 * SEEK_MODE_STATE.damping;
+
+  const applySystem = (sys) => {
+    const uniforms = sys.accVar.material.uniforms;
+    uniforms.extK.value = EM_STATE.k;
+    uniforms.extRadius.value = EM_STATE.radius;
+    uniforms.extTwist.value = EM_STATE.twist;
+    uniforms.extTwistHz.value = EM_STATE.twistHz;
+    uniforms.extC.value = EM_STATE.c;
+  };
+
+  if (sysA && sysB) {
+    applySystem(sysA);
+    applySystem(sysB);
+    if (sysA.chemVar?.material?.uniforms?.extRadius) sysA.chemVar.material.uniforms.extRadius.value = EM_STATE.radius;
+    if (sysA.posTargetVar?.material?.uniforms?.extRadius) sysA.posTargetVar.material.uniforms.extRadius.value = EM_STATE.radius;
+  }
+}
+
+function setupSeekPanelBindings() {
+  if (!seekPanel) return;
+
+  if (seekModeSelect) {
+    seekModeSelect.addEventListener('change', () => {
+      applySeekPreset(seekModeSelect.value);
+    });
+  }
+
+  for (const [key, control] of Object.entries(seekControls)) {
+    if (!control) continue;
+    control.addEventListener('input', () => {
+      SEEK_MODE_STATE.mode = 'manual';
+      SEEK_MODE_STATE[key] = Number(control.value);
+      syncSeekPanelFromState();
+    });
+  }
+
+  if (seekResetButton) {
+    seekResetButton.addEventListener('click', () => {
+      applySeekPreset('manual');
+    });
+  }
+
+  syncSeekPanelFromState();
+}
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -610,6 +711,8 @@ sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sys
 sysB.gpu.compute();
 sysA.gpu.compute();
 solveAlpha0FromRadialEquilibrium();
+setupSeekPanelBindings();
+applySeekStateToUniforms();
 
 // ==================== CONTROLS ====================
 window.addEventListener('keydown', (e) => {
@@ -799,6 +902,7 @@ function animate() {
   lastT = now;
 
   zipMode += (targetZipMode - zipMode) * (1.0 - Math.exp(-dt * 3.0));
+  applySeekStateToUniforms();
 
   const t = now / 1000;
 
@@ -909,7 +1013,7 @@ function animate() {
 animate();
 
 window.DNASpineArchitecture = {
-  sysA, sysB, DEBUG_STATE, EM_STATE, RESIDUAL_STATE, validationRunner,
+  sysA, sysB, DEBUG_STATE, EM_STATE, SEEK_MODE_STATE, RESIDUAL_STATE, validationRunner,
   getResidualMetrics: () => ({ ...RESIDUAL_STATE }),
   getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
   constants: {
