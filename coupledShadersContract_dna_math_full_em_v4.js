@@ -25,6 +25,7 @@ export function createChemShader() {
     uniform float ds;
     uniform float pitch;
     uniform float qPitch;
+    uniform float helixHandedness;
     uniform float zipMode;
     uniform float flowEnabled;
 
@@ -295,7 +296,7 @@ export function createChemShader() {
         c.w = clamp(c.w, -0.25, 0.25);
 
         // Helix phase propagation: φ_k = φ_{k-1} + q*ds + gRot
-        float dphi = qPitch * ds + c.w;
+        float dphi = helixHandedness * qPitch * ds + c.w;
         c.y = mod(cPrev.y + dphi, 2.0 * PI);
 
         gl_FragColor = c;
@@ -394,6 +395,11 @@ export function createCoupledPosTargetShader() {
     uniform float pitch;
     uniform float qPitch;
     uniform float axialShift;
+    uniform float helixHandedness;
+    uniform float strandPhaseA;
+    uniform float strandPhaseB;
+    uniform float phaseGapSign;
+    uniform float angleUnitRadians;
 
     uniform sampler2D extPos;
     uniform float extSamples;
@@ -424,6 +430,12 @@ export function createCoupledPosTargetShader() {
 
     vec4 readPos(float idx){ return texture2D(pos, uvFromIndex(idx)); }
     vec4 readChem(float idx){ return texture2D(chem, uvFromIndex(idx)); }
+
+    void strandAngles(float phi, float qP, float gapPhase, out float phiA, out float phiB){
+      float dThetaAxial = angleUnitRadians * helixHandedness * qP * axialShift;
+      phiA = phi + strandPhaseA - 0.5 * phaseGapSign * gapPhase;
+      phiB = phi + strandPhaseB + dThetaAxial + 0.5 * phaseGapSign * gapPhase;
+    }
 
     // ==================== ARCHITECTURE: FT_Transport ====================
     // Parallel transport frame (rotation-minimizing Bishop frame)
@@ -609,17 +621,11 @@ export function createCoupledPosTargetShader() {
         getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI Helix geometry with gap-modulated radius
-        float qP = qPitch;
         float phi = ck.y;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-
-        // Axial shift implies phase shift: Δθ = q*Δx
-        float dThetaAxial = qP * axialShift;
-
-        // MDPI Eq. (12): Strand A and B with phase offset
-        float phiA = phi - 0.5 * gapPhase;
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiA, phiB;
+        strandAngles(phi, qPitch, gapPhase, phiA, phiB);
 
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 baseB = p0 + 0.5 * t * axialShift;
@@ -695,7 +701,8 @@ export function createCoupledPosTargetShader() {
         // MDPI: Strand A with gap phase
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float phiA = phi - 0.5 * gapPhase;
+        float phiA, phiBUnused;
+        strandAngles(phi, qPitch, gapPhase, phiA, phiBUnused);
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 dest = baseA + R * (cos(phiA) * N + sin(phiA) * B);
 
@@ -731,12 +738,10 @@ export function createCoupledPosTargetShader() {
         getTransportedFrame(k, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI Eq. (12): Strand B with axial shift phase offset
-        float qP = qPitch;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float dThetaAxial = qP * axialShift;
-
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiAUnused, phiB;
+        strandAngles(phi, qPitch, gapPhase, phiAUnused, phiB);
         vec3 baseB = p0 + 0.5 * t * axialShift;
         vec3 dest = baseB + R * (cos(phiB) * N + sin(phiB) * B);
 
@@ -780,13 +785,10 @@ export function createCoupledPosTargetShader() {
         getTransportedFrame(kNode, t, N, B, idxStrandA0, idxSpineP0, perSpine, neck);
 
         // MDPI: Hub at midpoint of strands
-        float qP = qPitch;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float dThetaAxial = qP * axialShift;
-
-        float phiA = phi - 0.5 * gapPhase;
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiA, phiB;
+        strandAngles(phi, qPitch, gapPhase, phiA, phiB);
 
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 baseB = p0 + 0.5 * t * axialShift;
