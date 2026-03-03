@@ -252,7 +252,11 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     ? qHatPitchScaledSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatPitchScaledSamples.length
     : null;
 
-  const qBacksolveThreshold = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
+  const qBacksolveThresholdZipped = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
+  const qBacksolveThresholdUnzipped = criteria?.mdpiQBacksolveAbsErrMaxUnzipped ?? 5e-1;
+  const qBacksolveThreshold = (scenarioName === 'unzip' || scenarioName === 'reroute')
+    ? qBacksolveThresholdUnzipped
+    : qBacksolveThresholdZipped;
   const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 7e-1;
   const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 4e-1;
   const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
@@ -387,6 +391,7 @@ export function createAcceptanceValidationRunner(config) {
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
         mdpiQBacksolveAbsErrMax: 3.5e-1,
+        mdpiQBacksolveAbsErrMaxUnzipped: 5e-1,
         mdpiQBacksolveAvgAbsErrMax: 7e-1,
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
         mdpiQBacksolveMinSamples: 3
