@@ -831,6 +831,7 @@ function animate() {
       `(${validationRunner.getHudSummary().passed}/${validationRunner.getHudSummary().total} pass, ` +
       `${validationRunner.getHudSummary().failed} fail)`,
       `  scenario=${validationRunner.getHudSummary().currentScenario}`,
+      `  checks/scenario=${validationRunner.getHudSummary().metricCount}`,
       ``,
       `Frame: ${frame} | dt: ${(dt*1000).toFixed(2)}ms`
     ].join('\n');

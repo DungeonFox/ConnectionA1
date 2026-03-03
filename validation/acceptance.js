@@ -521,7 +521,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       emEnabled,
       skipped: !emEnabled || !alphaGapCouplingHasSignal,
       source: 'checks physical influence: nodes with alphaHat<alpha0 should exhibit larger mean gap'
-    ,
+    },
     alpha0AccelerationWiring: {
       pass: accelWiringPass ? 1 : 0,
       total: 1,
@@ -537,7 +537,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       skipped: !emEnabled || !accelWiringHasSignal,
       source: 'verifies runtime solved alpha0 is wired into acceleration shader uniforms with active coupling'
     }
-  }  };
+  };
 
   const allPass = Object.values(metrics).every((m) => (m.total === 1 ? m.pass === 1 : m.ratio >= topologyMinRatio));
   return { allPass, metrics, activeNodes };
@@ -686,11 +686,14 @@ export function createAcceptanceValidationRunner(config) {
 
     getHudSummary() {
       const current = scenarios[Math.min(scenarioIndex, scenarios.length - 1)];
+      const last = results.scenarios.length ? results.scenarios[results.scenarios.length - 1] : null;
+      const metricCount = last?.result?.metrics ? Object.keys(last.result.metrics).length : 0;
       return {
         status: results.summary.status,
         passed: results.summary.passed,
         failed: results.summary.failed,
         total: results.summary.total,
+        metricCount,
         currentScenario: finalized ? 'complete' : `${current.name} (${frameInScenario}/${current.frames})`
       };
     }
