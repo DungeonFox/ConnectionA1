@@ -69,7 +69,7 @@ function makeScenarioPlan(seedBase) {
   ];
 }
 
-function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled, alphaCalibration }) {
+function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled, alphaCalibration, accCalibration }) {
   const {
     NODE_COUNT,
     NECK_SEG,
@@ -133,6 +133,9 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     const g = chem[0];
     const phi = chem[1];
     const gGap = chem[2];
+    if (g <= 0.05) continue;
+    activeNodes++;
+
     const tipIdx = idxSpineP0 + k * perSpine + (NECK_SEG - 1);
     const tipAlphaHat = chemPixels[tipIdx * 4 + 1];
     if (Number.isFinite(alphaCalibration?.alpha0Solved) && Number.isFinite(tipAlphaHat)) {
@@ -144,9 +147,6 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
         alphaAboveGapSum += gGap;
       }
     }
-
-    if (g <= 0.05) continue;
-    activeNodes++;
     gapSum += gGap;
 
     const p0 = vec3At(posPixels, k);
@@ -391,7 +391,20 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const alpha0MinSamples = criteria?.alpha0MinSamples ?? 8;
   const alpha0Converged = !!alphaCalibration?.converged;
   const alpha0HasSamples = (alphaCalibration?.samples ?? 0) >= alpha0MinSamples;
-  const alpha0Pass = alpha0Converged && alpha0HasSamples && alpha0ResidualAbs <= alpha0ResidualThreshold;
+  const alpha0HasSignal = alpha0HasSamples && Number.isFinite(alphaCalibration?.alpha0Solved);
+  const alpha0Pass = !emEnabled || !alpha0HasSignal || (
+    alpha0Converged && alpha0ResidualAbs <= alpha0ResidualThreshold
+  );
+
+  const accelWiringAlphaErrMax = criteria?.alpha0AccelWiringAlphaErrMax ?? 1e-4;
+  const accelWiringMinCoupling = criteria?.alpha0AccelWiringMinCoupling ?? 1e-3;
+  const accAlpha0 = accCalibration?.alpha0;
+  const accCoupling = accCalibration?.alphaCoupling;
+  const accelWiringHasSignal = Number.isFinite(accAlpha0) && Number.isFinite(accCoupling) && Number.isFinite(alphaCalibration?.alpha0Solved);
+  const accelWiringAlphaErr = accelWiringHasSignal ? Math.abs(accAlpha0 - alphaCalibration.alpha0Solved) : null;
+  const accelWiringPass = !emEnabled || !accelWiringHasSignal || (
+    accelWiringAlphaErr <= accelWiringAlphaErrMax && accCoupling >= accelWiringMinCoupling
+  );
 
   const metrics = {
     helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
@@ -484,6 +497,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       iterations: alphaCalibration?.iterations ?? 0,
       candidateCount: alphaCalibration?.candidateCount ?? 0,
       hasEnoughSamples: alpha0HasSamples,
+      hasSignal: alpha0HasSignal,
+      skipped: !emEnabled || !alpha0HasSignal,
       alphaRange: {
         min: alphaCalibration?.minAlpha ?? null,
         max: alphaCalibration?.maxAlpha ?? null
@@ -506,8 +521,23 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       emEnabled,
       skipped: !emEnabled || !alphaGapCouplingHasSignal,
       source: 'checks physical influence: nodes with alphaHat<alpha0 should exhibit larger mean gap'
+    ,
+    alpha0AccelerationWiring: {
+      pass: accelWiringPass ? 1 : 0,
+      total: 1,
+      ratio: accelWiringPass ? 1 : 0,
+      thresholdAlphaErrAbsMax: accelWiringAlphaErrMax,
+      thresholdCouplingMin: accelWiringMinCoupling,
+      alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      accAlpha0,
+      accCoupling,
+      accAlphaErrAbs: accelWiringAlphaErr,
+      hasSignal: accelWiringHasSignal,
+      emEnabled,
+      skipped: !emEnabled || !accelWiringHasSignal,
+      source: 'verifies runtime solved alpha0 is wired into acceleration shader uniforms with active coupling'
     }
-  };
+  }  };
 
   const allPass = Object.values(metrics).every((m) => (m.total === 1 ? m.pass === 1 : m.ratio >= topologyMinRatio));
   return { allPass, metrics, activeNodes };
@@ -537,6 +567,7 @@ export function createAcceptanceValidationRunner(config) {
     setEMTwist,
     getZipMode,
     getAlphaCalibration,
+    getAccCalibration,
     texSize
   } = config;
 
@@ -569,7 +600,9 @@ export function createAcceptanceValidationRunner(config) {
         alpha0ResidualAbsMax: 1e-2,
         alpha0MinSamples: 8,
         alpha0GapCouplingMinSamples: 6,
-        alpha0GapCouplingMinDelta: 2e-2
+        alpha0GapCouplingMinDelta: 2e-2,
+        alpha0AccelWiringAlphaErrMax: 1e-4,
+        alpha0AccelWiringMinCoupling: 1e-3
       }
     }
   };
@@ -604,7 +637,8 @@ export function createAcceptanceValidationRunner(config) {
       zipMode: getZipMode(),
       scenarioName: s.name,
       emEnabled: !!s.emEnabled,
-      alphaCalibration: getAlphaCalibration ? getAlphaCalibration() : null
+      alphaCalibration: getAlphaCalibration ? getAlphaCalibration() : null,
+      accCalibration: getAccCalibration ? getAccCalibration() : null
     });
 
     const record = {

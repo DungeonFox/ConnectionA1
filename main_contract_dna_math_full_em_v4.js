@@ -719,6 +719,10 @@ const validationRunner = createAcceptanceValidationRunner({
   setEMTwist,
   getZipMode: () => zipMode,
   getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
+  getAccCalibration: () => ({
+    alpha0: sysA.accVar.material.uniforms.alpha0.value,
+    alphaCoupling: sysA.accVar.material.uniforms.alphaCoupling.value
+  }),
   texSize: TEX_SIZE
 });
 
