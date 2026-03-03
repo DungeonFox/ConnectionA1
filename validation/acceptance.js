@@ -82,6 +82,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
   let rungPass = 0;
   let gapSum = 0;
   const qHatFxMxSamples = [];
+  const qHatPitchScaledSamples = [];
 
   const extActive = [];
   if (extPixels && extPixels.length >= 4) {
@@ -109,7 +110,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
     const b = vec3At(posPixels, idxStrandB0 + k);
     const hub = vec3At(posPixels, idxSpineP0 + k * perSpine + (NECK_SEG - 1));
 
-    if (extActive.length > 0) {
+    if (emEnabled && extActive.length > 0) {
       const km = Math.max(0, k - 1);
       const kp = Math.min(NODE_COUNT - 1, k + 1);
       const pm = vec3At(posPixels, km);
@@ -147,11 +148,17 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
                 radial[0] * forceDir[1] - radial[1] * forceDir[0]
               ];
               const mx = momentVec[0] * t[0] + momentVec[1] * t[1] + momentVec[2] * t[2];
-              if (Math.abs(mx) > 1e-4) {
+              if (Math.abs(mx) > 1e-4 && Math.abs(fx) > 1e-6) {
                 const qFxMx = -fx / mx;
                 const qAbs = Math.abs(fx) / Math.abs(mx);
                 if (Number.isFinite(qFxMx) && Math.abs(qFxMx) <= 50.0) qHatFxMxSamples.push(qFxMx);
                 if (Number.isFinite(qAbs) && Math.abs(qAbs) <= 50.0) qHatFxMxSamples.push(qAbs);
+
+                const localR = Math.max(HELIX_R + gGap, 1e-4);
+                const qPitchFromFxMx = 1.0 / (Math.max(Math.abs(qFxMx), 1e-6) * localR * localR);
+                const qPitchFromAbs = 1.0 / (Math.max(qAbs, 1e-6) * localR * localR);
+                if (Number.isFinite(qPitchFromFxMx) && qPitchFromFxMx <= 50.0) qHatPitchScaledSamples.push(qPitchFromFxMx);
+                if (Number.isFinite(qPitchFromAbs) && qPitchFromAbs <= 50.0) qHatPitchScaledSamples.push(qPitchFromAbs);
               }
             }
           }
@@ -219,26 +226,34 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
   const eq1112Threshold = 5e-2;
   const eq1112Pass = Math.min(uErrSigned, uErrNeg) <= eq1112Threshold;
 
-  const sortedQHat = [...qHatFxMxSamples].sort((x, y) => x - y);
-  const qHatMean = qHatFxMxSamples.length ? qHatFxMxSamples.reduce((acc, v) => acc + v, 0) / qHatFxMxSamples.length : 0;
-  const qHatMedian = qHatFxMxSamples.length
+  const sortedQHatRaw = [...qHatFxMxSamples].sort((x, y) => x - y);
+  const qHatRawMean = qHatFxMxSamples.length ? qHatFxMxSamples.reduce((acc, v) => acc + v, 0) / qHatFxMxSamples.length : 0;
+  const qHatRawMedian = qHatFxMxSamples.length
+    ? (sortedQHatRaw.length % 2
+      ? sortedQHatRaw[(sortedQHatRaw.length - 1) / 2]
+      : 0.5 * (sortedQHatRaw[sortedQHatRaw.length / 2 - 1] + sortedQHatRaw[sortedQHatRaw.length / 2]))
+    : 0;
+
+  const sortedQHat = [...qHatPitchScaledSamples].sort((x, y) => x - y);
+  const qHatMean = qHatPitchScaledSamples.length ? qHatPitchScaledSamples.reduce((acc, v) => acc + v, 0) / qHatPitchScaledSamples.length : 0;
+  const qHatMedian = qHatPitchScaledSamples.length
     ? (sortedQHat.length % 2
       ? sortedQHat[(sortedQHat.length - 1) / 2]
       : 0.5 * (sortedQHat[sortedQHat.length / 2 - 1] + sortedQHat[sortedQHat.length / 2]))
     : 0;
-  const qHatTrimmed = qHatFxMxSamples.length > 2
+  const qHatTrimmed = qHatPitchScaledSamples.length > 2
     ? sortedQHat.slice(1, -1).reduce((acc, v) => acc + v, 0) / (sortedQHat.length - 2)
     : qHatMean;
   const qHatMeanErr = Math.abs(qHatMean - Q_PITCH);
   const qHatMedianErr = Math.abs(qHatMedian - Q_PITCH);
   const qHatTrimmedErr = Math.abs(qHatTrimmed - Q_PITCH);
   const qHatMinEstimatorErr = Math.min(qHatMeanErr, qHatMedianErr, qHatTrimmedErr);
-  const qHatAvgAbsErr = qHatFxMxSamples.length
-    ? qHatFxMxSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatFxMxSamples.length
+  const qHatAvgAbsErr = qHatPitchScaledSamples.length
+    ? qHatPitchScaledSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatPitchScaledSamples.length
     : Number.POSITIVE_INFINITY;
 
-  const qBacksolveThreshold = 7e-1;
-  const qBacksolveHasSignal = qHatFxMxSamples.length >= 3;
+  const qBacksolveThreshold = 3.5e-1;
+  const qBacksolveHasSignal = qHatPitchScaledSamples.length >= 3;
   const qBacksolvePass = !emEnabled || !qBacksolveHasSignal || qHatMinEstimatorErr <= qBacksolveThreshold;
 
   const zipBoundPass = (
@@ -284,7 +299,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
       total: 1,
       ratio: qBacksolvePass ? 1 : 0,
       thresholdAbsErr: qBacksolveThreshold,
-      sampleCount: qHatFxMxSamples.length,
+      sampleCount: qHatPitchScaledSamples.length,
       qPitch: Q_PITCH,
       qHatMean,
       qHatMedian,
@@ -294,10 +309,12 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
       qHatTrimmedErr,
       qHatMinEstimatorErr,
       qHatAvgAbsErr,
+      qHatRawMean,
+      qHatRawMedian,
       emEnabled,
       hasSignal: qBacksolveHasSignal,
       skipped: !emEnabled || !qBacksolveHasSignal,
-      source: 'nearest-ext force proxy; q_hat variants from -Fx/Mx and |Fx|/|Mx|'
+      source: 'nearest-ext force proxy; raw -Fx/Mx variants mapped to qPitch via 1/(|ratio|*R^2)'
     }
   };
 
@@ -348,7 +365,7 @@ export function createAcceptanceValidationRunner(config) {
         topologyAndRoutingMinRatio: 0.9,
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
-        mdpiQBacksolveAbsErrMax: 7e-1,
+        mdpiQBacksolveAbsErrMax: 3.5e-1,
         mdpiQBacksolveMinSamples: 3
       }
     }
