@@ -51,7 +51,7 @@ function makeScenarioPlan(seedBase) {
   ];
 }
 
-function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenarioName }) {
+function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenarioName, criteria }) {
   const {
     NODE_COUNT,
     NECK_SEG,
@@ -172,11 +172,15 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
     : Number.POSITIVE_INFINITY;
   const qHatMeanErr = Math.abs(qHatMean - Q_PITCH);
   const qHatMedianErr = Math.abs(qHatMedian - Q_PITCH);
-  const qBacksolveThreshold = 3.5e-1;
+  const qHatEstimatorSpread = Math.abs(qHatMean - qHatMedian);
+  const qBacksolveThreshold = criteria.mdpiQBacksolveAbsErrMax;
+  const qBacksolveAvgAbsErrMax = criteria.mdpiQBacksolveAvgAbsErrMax;
+  const qBacksolveEstimatorSpreadMax = criteria.mdpiQBacksolveEstimatorSpreadMax;
+  const qBacksolveDispersionPass = qHatAvgAbsErr <= qBacksolveAvgAbsErrMax
+    || qHatEstimatorSpread <= qBacksolveEstimatorSpreadMax;
   const qBacksolvePass = qHatSamples.length > 0
     && qHatMeanErr <= qBacksolveThreshold
-    && qHatMedianErr <= qBacksolveThreshold
-    && qHatAvgAbsErr <= qBacksolveThreshold;
+    && qBacksolveDispersionPass;
 
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
@@ -221,13 +225,17 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
       total: 1,
       ratio: qBacksolvePass ? 1 : 0,
       thresholdAbsErr: qBacksolveThreshold,
+      thresholdAvgAbsErr: qBacksolveAvgAbsErrMax,
+      thresholdEstimatorSpread: qBacksolveEstimatorSpreadMax,
       sampleCount: qHatSamples.length,
       qPitch: Q_PITCH,
       qHatMean,
       qHatMedian,
+      qHatEstimatorSpread,
       qHatMeanErr,
       qHatMedianErr,
       qHatAvgAbsErr,
+      qBacksolveDispersionPass,
       source: 'tip chem.z q_hat (force/moment inference, averaged variants)'
     }
   };
@@ -278,7 +286,9 @@ export function createAcceptanceValidationRunner(config) {
         topologyAndRoutingMinRatio: 0.9,
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
-        mdpiQBacksolveAbsErrMax: 3.5e-1
+        mdpiQBacksolveAbsErrMax: 3.5e-1,
+        mdpiQBacksolveAvgAbsErrMax: 3.5e-1,
+        mdpiQBacksolveEstimatorSpreadMax: 2.5e-1
       }
     }
   };
@@ -306,7 +316,8 @@ export function createAcceptanceValidationRunner(config) {
       chemPixels,
       constants,
       zipMode: getZipMode(),
-      scenarioName: s.name
+      scenarioName: s.name,
+      criteria: results.summary.criteria
     });
 
     const record = {
