@@ -369,7 +369,9 @@ export function createChemShader() {
         vec4 ck = readChem(kNode);
         float g = ck.x;
         float gGap = ck.z;
+        float alphaUnzipPressure = alphaUnzipPressureForNode(kNode, idxSpineP0, perSpine, neck);
         float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip *= (1.0 - 0.45 * alphaUnzipPressure);
         localZip = clamp(localZip, 0.0, 1.0);
 
         float prevG = readChem(max(kNode - 1.0, 0.0)).x;
@@ -594,6 +596,13 @@ export function createCoupledPosTargetShader() {
       return wellOrigin + offset;
     }
 
+    float alphaUnzipPressureForNode(float kNode, float idxSpineP0, float perSpine, float neck){
+      float tipIdx = idxSpineP0 + kNode * perSpine + (neck - 1.0);
+      float alphaHatTip = readChem(tipIdx).y;
+      float alphaDeficit = max(alpha0 - alphaHatTip, 0.0);
+      return smoothstep(0.01, 0.35, alphaDeficit);
+    }
+
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
     // Deterministic yellow highway from persisted route state
     vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
@@ -663,7 +672,9 @@ export function createCoupledPosTargetShader() {
         float gGap = ck.z;
 
         // ZS_Zippedness: Compute local zip from global mode and gap
+        float alphaUnzipPressure = alphaUnzipPressureForNode(k, idxSpineP0, perSpine, neck);
         float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip *= (1.0 - 0.45 * alphaUnzipPressure);
         localZip = clamp(localZip, 0.0, 1.0);
 
         // Get backbone frame
@@ -745,7 +756,9 @@ export function createCoupledPosTargetShader() {
         float gGap = ck.z;
         float phi = ck.y;
 
+        float alphaUnzipPressure = alphaUnzipPressureForNode(k, idxSpineP0, perSpine, neck);
         float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip *= (1.0 - 0.45 * alphaUnzipPressure);
         localZip = clamp(localZip, 0.0, 1.0);
 
         membership = step(0.05, g);
