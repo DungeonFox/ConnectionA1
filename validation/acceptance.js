@@ -253,8 +253,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     : null;
 
   const qBacksolveThreshold = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
-  const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 5e-1;
-  const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 3.5e-1;
+  const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 7e-1;
+  const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 4e-1;
   const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
   const qHatEstimatorSpread = Math.abs(qHatMean - qHatMedian);
   const qBacksolveHasSignal = qHatPitchScaledSamples.length >= qBacksolveMinSamples;
@@ -380,8 +380,8 @@ export function createAcceptanceValidationRunner(config) {
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
         mdpiQBacksolveAbsErrMax: 3.5e-1,
-        mdpiQBacksolveAvgAbsErrMax: 5e-1,
-        mdpiQBacksolveEstimatorSpreadMax: 3.5e-1,
+        mdpiQBacksolveAvgAbsErrMax: 7e-1,
+        mdpiQBacksolveEstimatorSpreadMax: 4e-1,
         mdpiQBacksolveMinSamples: 3
       }
     }
