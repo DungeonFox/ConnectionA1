@@ -22,10 +22,90 @@
       background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 8px;
       max-width: 520px; pointer-events:none; white-space: pre;
     }
+    #seek-panel {
+      position: fixed;
+      right: 10px;
+      top: 10px;
+      width: 260px;
+      color: #ddd;
+      font: 12px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 8px;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+      pointer-events: auto;
+    }
+    #seek-panel h3 {
+      margin: 0;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+    }
+    #seek-panel label,
+    #seek-panel .row {
+      display: grid;
+      gap: 4px;
+    }
+    #seek-panel .inline {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 6px;
+    }
+    #seek-panel input[type='range'] { width: 100%; }
+    #seek-panel button,
+    #seek-panel select {
+      background: #151515;
+      color: #ddd;
+      border: 1px solid #3a3a3a;
+      border-radius: 4px;
+      padding: 3px 6px;
+      font: inherit;
+    }
+    #seek-panel .value { color: #9bd2ff; }
   </style>
 </head>
 <body>
   <div id="hud">Loading…</div>
+  <section id="seek-panel" aria-label="Spine Seeking Mode controls">
+    <h3>Spine Seeking Mode</h3>
+    <label class="row">
+      <span>Mode</span>
+      <select id="seek-mode">
+        <option value="manual">manual</option>
+        <option value="assist">assist</option>
+        <option value="aggressive">aggressive</option>
+        <option value="precision">precision</option>
+      </select>
+    </label>
+
+    <label class="row">
+      <div class="inline"><span>seekStrength</span><span class="value" id="seek-val-seekStrength">0.00</span></div>
+      <input id="seek-seekStrength" type="range" min="0" max="5" step="0.01" value="1" />
+    </label>
+    <label class="row">
+      <div class="inline"><span>captureRadius</span><span class="value" id="seek-val-captureRadius">0.00</span></div>
+      <input id="seek-captureRadius" type="range" min="0.5" max="30" step="0.1" value="10" />
+    </label>
+    <label class="row">
+      <div class="inline"><span>torqueBias</span><span class="value" id="seek-val-torqueBias">0.00</span></div>
+      <input id="seek-torqueBias" type="range" min="-1" max="1" step="0.01" value="0" />
+    </label>
+    <label class="row">
+      <div class="inline"><span>phaseLock</span><span class="value" id="seek-val-phaseLock">0.00</span></div>
+      <input id="seek-phaseLock" type="range" min="0" max="1" step="0.01" value="0.5" />
+    </label>
+    <label class="row">
+      <div class="inline"><span>damping</span><span class="value" id="seek-val-damping">0.00</span></div>
+      <input id="seek-damping" type="range" min="0" max="2" step="0.01" value="0.4" />
+    </label>
+
+    <div class="inline">
+      <button id="seek-reset" type="button">Reset Defaults</button>
+      <span id="seek-mode-readout">mode: manual</span>
+    </div>
+  </section>
   <script type="module" src="./main_contract_dna_math_full_em_v4.js"></script>
 </body>
 </html>
