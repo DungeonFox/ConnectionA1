@@ -541,7 +541,10 @@ const validationRunner = createAcceptanceValidationRunner({
   renderer,
   sysA,
   constants: window.DNASpineArchitecture?.constants || {
-    TEX_SIZE, NODE_COUNT, NECK_SEG, HELIX_R, Q_PITCH, DS, IDX_RUNG0
+    TEX_SIZE, NODE_COUNT, NECK_SEG,
+    HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
+    COT_ALPHA, ALPHA_EXP, U_S,
+    DS, IDX_RUNG0
   },
   emState: EM_STATE,
   setTargetZipMode: (value) => { targetZipMode = value; },

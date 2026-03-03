@@ -56,7 +56,12 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
     NODE_COUNT,
     NECK_SEG,
     HELIX_R,
+    PITCH,
+    AXIAL_SHIFT,
     Q_PITCH,
+    COT_ALPHA,
+    ALPHA_EXP,
+    U_S,
     DS,
     IDX_RUNG0
   } = constants;
@@ -76,6 +81,7 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
   let rungChecks = 0;
   let rungPass = 0;
   let gapSum = 0;
+  const qHatSamples = [];
 
   for (let k = 0; k < NODE_COUNT; k++) {
     const chem = vec3At(chemPixels, k);
@@ -90,6 +96,9 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
     const a = vec3At(posPixels, idxStrandA0 + k);
     const b = vec3At(posPixels, idxStrandB0 + k);
     const hub = vec3At(posPixels, idxSpineP0 + k * perSpine + (NECK_SEG - 1));
+    const tipChem = vec3At(chemPixels, idxSpineP0 + k * perSpine + (NECK_SEG - 1));
+
+    if (Number.isFinite(tipChem[2])) qHatSamples.push(tipChem[2]);
 
     const expectedR = HELIX_R + gGap;
     const errA = Math.abs(dist(a, hub) - expectedR);
@@ -130,6 +139,45 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
   }
 
   const meanGap = activeNodes > 0 ? gapSum / activeNodes : 0;
+
+  const alphaGeom = Number.isFinite(ALPHA_EXP) ? ALPHA_EXP : Math.atan2(PITCH, TWO_PI * HELIX_R);
+  const tanAlphaGeom = Math.tan(alphaGeom);
+  const tanRhs = PITCH / (TWO_PI * HELIX_R);
+  const cotAlphaGeom = 1.0 / Math.max(Math.tan(alphaGeom), 1e-6);
+  const cotRhs = Q_PITCH * HELIX_R;
+  const tanRelErr = Math.abs(tanAlphaGeom - tanRhs) / Math.max(Math.abs(tanRhs), 1e-6);
+  const cotRelErr = Math.abs(cotAlphaGeom - cotRhs) / Math.max(Math.abs(cotRhs), 1e-6);
+
+  const eq34Threshold = 2e-2;
+  const eq34Pass = tanRelErr <= eq34Threshold && cotRelErr <= eq34Threshold;
+
+  const uExpectedSigned = Q_PITCH * AXIAL_SHIFT;
+  const uExpectedNeg = -uExpectedSigned;
+  const uErrSigned = Math.abs(U_S - uExpectedSigned);
+  const uErrNeg = Math.abs(U_S - uExpectedNeg);
+  const uExpected = (uErrSigned <= uErrNeg) ? uExpectedSigned : uExpectedNeg;
+  const uConvention = (uErrSigned <= uErrNeg) ? '+q*x_s' : '-q*x_s';
+  const eq1112Threshold = 5e-2;
+  const eq1112Pass = Math.min(uErrSigned, uErrNeg) <= eq1112Threshold;
+
+  const sortedQHat = [...qHatSamples].sort((x, y) => x - y);
+  const qHatMean = qHatSamples.length ? qHatSamples.reduce((acc, v) => acc + v, 0) / qHatSamples.length : 0;
+  const qHatMedian = qHatSamples.length
+    ? (sortedQHat.length % 2
+      ? sortedQHat[(sortedQHat.length - 1) / 2]
+      : 0.5 * (sortedQHat[sortedQHat.length / 2 - 1] + sortedQHat[sortedQHat.length / 2]))
+    : 0;
+  const qHatAvgAbsErr = qHatSamples.length
+    ? qHatSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatSamples.length
+    : Number.POSITIVE_INFINITY;
+  const qHatMeanErr = Math.abs(qHatMean - Q_PITCH);
+  const qHatMedianErr = Math.abs(qHatMedian - Q_PITCH);
+  const qBacksolveThreshold = 3.5e-1;
+  const qBacksolvePass = qHatSamples.length > 0
+    && qHatMeanErr <= qBacksolveThreshold
+    && qHatMedianErr <= qBacksolveThreshold
+    && qHatAvgAbsErr <= qBacksolveThreshold;
+
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
     (scenarioName === 'unzip' || scenarioName === 'reroute') ? (meanGap >= 0.75) :
@@ -141,7 +189,47 @@ function evaluateInvariants({ posPixels, chemPixels, constants, zipMode, scenari
     pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0 },
     hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0 },
     rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0 },
-    zipBoundBehavior: { pass: zipBoundPass ? 1 : 0, total: 1, ratio: zipBoundPass ? 1 : 0, meanGap: round3(meanGap), zipMode: round3(zipMode) }
+    zipBoundBehavior: { pass: zipBoundPass ? 1 : 0, total: 1, ratio: zipBoundPass ? 1 : 0, meanGap: round3(meanGap), zipMode: round3(zipMode) },
+    eq34GeometryConsistency: {
+      pass: eq34Pass ? 1 : 0,
+      total: 1,
+      ratio: eq34Pass ? 1 : 0,
+      thresholdRelErr: eq34Threshold,
+      alphaGeom,
+      tanAlphaGeom,
+      tanRhs,
+      tanRelErr,
+      cotAlphaGeom,
+      cotRhs,
+      cotRelErr,
+      cotAlphaConfig: COT_ALPHA
+    },
+    eq1112USConsistency: {
+      pass: eq1112Pass ? 1 : 0,
+      total: 1,
+      ratio: eq1112Pass ? 1 : 0,
+      thresholdAbsErr: eq1112Threshold,
+      u_s: U_S,
+      x_s: AXIAL_SHIFT,
+      q: Q_PITCH,
+      chosenConvention: uConvention,
+      uExpected,
+      absError: Math.min(uErrSigned, uErrNeg)
+    },
+    qBacksolveConsistency: {
+      pass: qBacksolvePass ? 1 : 0,
+      total: 1,
+      ratio: qBacksolvePass ? 1 : 0,
+      thresholdAbsErr: qBacksolveThreshold,
+      sampleCount: qHatSamples.length,
+      qPitch: Q_PITCH,
+      qHatMean,
+      qHatMedian,
+      qHatMeanErr,
+      qHatMedianErr,
+      qHatAvgAbsErr,
+      source: 'tip chem.z q_hat (force/moment inference, averaged variants)'
+    }
   };
 
   const allPass = Object.values(metrics).every((m) => m.ratio >= 0.9 || (m.total === 1 && m.pass === 1));
@@ -181,7 +269,18 @@ export function createAcceptanceValidationRunner(config) {
     deterministicSeed: seed,
     createdAt: new Date().toISOString(),
     scenarios: [],
-    summary: { passed: 0, failed: 0, total: scenarios.length, status: 'running' }
+    summary: {
+      passed: 0,
+      failed: 0,
+      total: scenarios.length,
+      status: 'running',
+      criteria: {
+        topologyAndRoutingMinRatio: 0.9,
+        mdpiEq34RelErrMax: 2e-2,
+        mdpiEq1112AbsErrMax: 5e-2,
+        mdpiQBacksolveAbsErrMax: 3.5e-1
+      }
+    }
   };
 
   window.DNAValidationResults = results;
