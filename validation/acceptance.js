@@ -228,10 +228,23 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     const pm = vec3At(posPixels, km);
     const pp = vec3At(posPixels, kp);
     const t = normalize([pp[0] - pm[0], pp[1] - pm[1], pp[2] - pm[2]]);
-    const rA = normalize([a[0] - hub[0], a[1] - hub[1], a[2] - hub[2]]);
-    const rB = normalize([b[0] - hub[0], b[1] - hub[1], b[2] - hub[2]]);
-    if (k > 0 && t && rA && rB) {
-      const observedOffset = Math.atan2(dot(t, cross(rA, rB)), dot(rA, rB));
+    const rARaw = normalize([a[0] - hub[0], a[1] - hub[1], a[2] - hub[2]]);
+    const rBRaw = normalize([b[0] - hub[0], b[1] - hub[1], b[2] - hub[2]]);
+    if (k > 0 && t && rARaw && rBRaw) {
+      const rAPlane = normalize([
+        rARaw[0] - t[0] * dot(rARaw, t),
+        rARaw[1] - t[1] * dot(rARaw, t),
+        rARaw[2] - t[2] * dot(rARaw, t)
+      ]);
+      const rBPlane = normalize([
+        rBRaw[0] - t[0] * dot(rBRaw, t),
+        rBRaw[1] - t[1] * dot(rBRaw, t),
+        rBRaw[2] - t[2] * dot(rBRaw, t)
+      ]);
+      if (!rAPlane || !rBPlane) {
+        // Ill-conditioned projection; skip this sample.
+      } else {
+      const observedOffset = Math.atan2(dot(t, cross(rAPlane, rBPlane)), dot(rAPlane, rBPlane));
       const gapPhase = 0.35 * Math.PI * Math.max(0.0, Math.min(1.6, gGap));
       const expectedOffset = wrapAnglePi((strandBPhaseOffset - strandAPhaseOffset) + handednessSign * Q_PITCH * AXIAL_SHIFT * angleUnitScale + gapPhase);
       const phaseOffsetTolerance = criteria?.conventionPhaseOffsetAbsErrMax ?? 0.35;
@@ -259,6 +272,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       if (expectedAdvanceSign !== 0) {
         conventionWindingChecks++;
         if (observedAdvanceSign === expectedAdvanceSign) conventionWindingPass++;
+      }
       }
     }
 
