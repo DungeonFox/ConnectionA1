@@ -78,6 +78,15 @@ const SEEK_MODE_STATE = {
   ...SEEK_MODE_PRESETS.manual
 };
 
+
+const SEEK_POLICY_STATE = {
+  seekWDistance: 1.0,
+  seekWTangent: 0.6,
+  seekWRadial: 0.4,
+  seekWTorque: 0.5,
+  seekMaxInfluence: 0.7
+};
+
 let zipMode = 1.0;
 let targetZipMode = 1.0;
 
@@ -333,12 +342,25 @@ function applySeekPreset(modeName) {
   syncSeekPanelFromState();
 }
 
+function deriveSeekPolicyUniforms() {
+  const strength = Math.max(0.0, SEEK_MODE_STATE.seekStrength);
+  const phaseLock = Math.max(0.0, Math.min(1.0, SEEK_MODE_STATE.phaseLock));
+  const damping = Math.max(0.0, SEEK_MODE_STATE.damping);
+
+  SEEK_POLICY_STATE.seekWDistance = 0.35 + 0.90 * strength;
+  SEEK_POLICY_STATE.seekWTangent = 0.20 + 1.20 * phaseLock;
+  SEEK_POLICY_STATE.seekWRadial = 0.15 + 0.75 * damping;
+  SEEK_POLICY_STATE.seekWTorque = SEEK_MODE_STATE.torqueBias;
+  SEEK_POLICY_STATE.seekMaxInfluence = Math.max(0.05, Math.min(2.0, 0.35 + 0.03 * SEEK_MODE_STATE.captureRadius));
+}
+
 function applySeekStateToUniforms() {
   EM_STATE.k = 50.0 * SEEK_MODE_STATE.seekStrength;
   EM_STATE.radius = SEEK_MODE_STATE.captureRadius;
   EM_STATE.twist = SEEK_MODE_STATE.torqueBias;
   EM_STATE.twistHz = 0.25 + SEEK_MODE_STATE.phaseLock * 3.75;
   EM_STATE.c = 10.0 * SEEK_MODE_STATE.damping;
+  deriveSeekPolicyUniforms();
 
   const applySystem = (sys) => {
     const uniforms = sys.accVar.material.uniforms;
@@ -354,6 +376,17 @@ function applySeekStateToUniforms() {
     applySystem(sysB);
     if (sysA.chemVar?.material?.uniforms?.extRadius) sysA.chemVar.material.uniforms.extRadius.value = EM_STATE.radius;
     if (sysA.posTargetVar?.material?.uniforms?.extRadius) sysA.posTargetVar.material.uniforms.extRadius.value = EM_STATE.radius;
+
+    const chemUniforms = sysA.chemVar?.material?.uniforms;
+    const posUniforms = sysA.posTargetVar?.material?.uniforms;
+    for (const uniforms of [chemUniforms, posUniforms]) {
+      if (!uniforms) continue;
+      if (uniforms.seekWDistance) uniforms.seekWDistance.value = SEEK_POLICY_STATE.seekWDistance;
+      if (uniforms.seekWTangent) uniforms.seekWTangent.value = SEEK_POLICY_STATE.seekWTangent;
+      if (uniforms.seekWRadial) uniforms.seekWRadial.value = SEEK_POLICY_STATE.seekWRadial;
+      if (uniforms.seekWTorque) uniforms.seekWTorque.value = SEEK_POLICY_STATE.seekWTorque;
+      if (uniforms.seekMaxInfluence) uniforms.seekMaxInfluence.value = SEEK_POLICY_STATE.seekMaxInfluence;
+    }
   }
 }
 
@@ -576,6 +609,11 @@ function makeSystemA(getExtTexture) {
     extPos: { value: getExtTexture() },
     extSamples: { value: EM_STATE.enabled ? EM_STATE.samples : 0.0 },
     extRadius: { value: EM_STATE.radius },
+    seekWDistance: { value: SEEK_POLICY_STATE.seekWDistance },
+    seekWTangent: { value: SEEK_POLICY_STATE.seekWTangent },
+    seekWRadial: { value: SEEK_POLICY_STATE.seekWRadial },
+    seekWTorque: { value: SEEK_POLICY_STATE.seekWTorque },
+    seekMaxInfluence: { value: SEEK_POLICY_STATE.seekMaxInfluence },
     helixR: { value: HELIX_R },
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
@@ -603,6 +641,11 @@ function makeSystemA(getExtTexture) {
     extPos: { value: getExtTexture() },
     extSamples: { value: EM_STATE.enabled ? EM_STATE.samples : 0.0 },
     extRadius: { value: EM_STATE.radius },
+    seekWDistance: { value: SEEK_POLICY_STATE.seekWDistance },
+    seekWTangent: { value: SEEK_POLICY_STATE.seekWTangent },
+    seekWRadial: { value: SEEK_POLICY_STATE.seekWRadial },
+    seekWTorque: { value: SEEK_POLICY_STATE.seekWTorque },
+    seekMaxInfluence: { value: SEEK_POLICY_STATE.seekMaxInfluence },
     wellOrigin: { value: new THREE.Vector3(0, 0, 0) },
     unusedOffset: { value: new THREE.Vector3(0, 0, 0) },
     flowEnabled: { value: 1.0 },
