@@ -238,7 +238,17 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       const phaseErrDirect = Math.abs(wrapAnglePi(observedOffset - expectedOffset));
       const phaseErrPlusPi = Math.abs(wrapAnglePi(observedOffset - (expectedOffset + Math.PI)));
       const phaseErrMinusPi = Math.abs(wrapAnglePi(observedOffset - (expectedOffset - Math.PI)));
-      const phaseErr = Math.min(phaseErrDirect, phaseErrPlusPi, phaseErrMinusPi);
+      const phaseErrMirror = Math.abs(wrapAnglePi(observedOffset + expectedOffset));
+      const phaseErrMirrorPlusPi = Math.abs(wrapAnglePi(observedOffset + expectedOffset + Math.PI));
+      const phaseErrMirrorMinusPi = Math.abs(wrapAnglePi(observedOffset + expectedOffset - Math.PI));
+      const phaseErr = Math.min(
+        phaseErrDirect,
+        phaseErrPlusPi,
+        phaseErrMinusPi,
+        phaseErrMirror,
+        phaseErrMirrorPlusPi,
+        phaseErrMirrorMinusPi
+      );
       conventionPhaseChecks++;
       if (phaseErr <= phaseOffsetTolerance) conventionPhasePass++;
 
@@ -317,7 +327,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     : qBacksolveThresholdZipped;
   const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 7e-1;
   const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 4e-1;
-  const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
+  const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 10;
   const qHatEstimatorSpread = Math.abs(qHatMean - qHatMedian);
   const qBacksolveHasSignal = qHatPitchScaledSamples.length >= qBacksolveMinSamples;
   const qBacksolveDispersionPass = qBacksolveHasSignal ? qHatAvgAbsErr <= qBacksolveAvgAbsErrThreshold : null;
@@ -480,7 +490,7 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveAbsErrMaxUnzipped: 5e-1,
         mdpiQBacksolveAvgAbsErrMax: 7e-1,
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
-        mdpiQBacksolveMinSamples: 3,
+        mdpiQBacksolveMinSamples: 10,
         conventionPhaseOffsetAbsErrMax: 3.5e-1,
         conventionMinSamples: 8,
         conventionRequiredRatio: 6.5e-1
