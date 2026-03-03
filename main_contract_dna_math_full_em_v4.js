@@ -8,6 +8,7 @@ import {
   createChemShader, 
   createCoupledPosTargetShader
 } from './coupledShadersContract_dna_math_full_em_v4.js';
+import { createAcceptanceValidationRunner } from './validation/acceptance.js';
 
 // ==================== ARCHITECTURE: SF_StateSchema ====================
 const TEX_SIZE = 64;
@@ -450,6 +451,50 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+function setEMEnabled(enabled) {
+  EM_STATE.enabled = !!enabled;
+  const emSamples = EM_STATE.enabled ? EM_STATE.samples : 0.0;
+  sysA.accVar.material.uniforms.extEnabled.value = EM_STATE.enabled;
+  sysB.accVar.material.uniforms.extEnabled.value = EM_STATE.enabled;
+  sysA.chemVar.material.uniforms.extSamples.value = emSamples;
+  sysA.accVar.material.uniforms.extSamples.value = emSamples;
+  sysB.accVar.material.uniforms.extSamples.value = emSamples;
+}
+
+function setEMRadius(radius) {
+  EM_STATE.radius = radius;
+  sysA.accVar.material.uniforms.extRadius.value = EM_STATE.radius;
+  sysB.accVar.material.uniforms.extRadius.value = EM_STATE.radius;
+  sysA.chemVar.material.uniforms.extRadius.value = EM_STATE.radius;
+}
+
+function setEMTwist(twist) {
+  EM_STATE.twist = twist;
+  sysA.accVar.material.uniforms.extTwist.value = EM_STATE.twist;
+  sysB.accVar.material.uniforms.extTwist.value = EM_STATE.twist;
+}
+
+function setFlowEnabled(enabled) {
+  sysA.chemVar.material.uniforms.flowEnabled.value = enabled;
+  sysA.posTargetVar.material.uniforms.flowEnabled.value = enabled;
+}
+
+const validationRunner = createAcceptanceValidationRunner({
+  renderer,
+  sysA,
+  constants: window.DNASpineArchitecture?.constants || {
+    TEX_SIZE, NODE_COUNT, NECK_SEG, HELIX_R, Q_PITCH, DS, IDX_RUNG0
+  },
+  emState: EM_STATE,
+  setTargetZipMode: (value) => { targetZipMode = value; },
+  setFlowEnabled,
+  setEMEnabled,
+  setEMRadius,
+  setEMTwist,
+  getZipMode: () => zipMode,
+  texSize: TEX_SIZE
+});
+
 let lastT = performance.now();
 let frame = 0;
 
@@ -504,6 +549,8 @@ function animate() {
   sysA.mat.uniforms.pos.value       = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
   sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
 
+  validationRunner.update();
+
   // Debug uniforms
   if (sysA.mat.uniforms.showZipField) sysA.mat.uniforms.showZipField.value = DEBUG_STATE.showZipField;
   if (sysA.mat.uniforms.showCalcium) sysA.mat.uniforms.showCalcium.value = DEBUG_STATE.showCalcium;
@@ -538,6 +585,12 @@ function animate() {
       `[SF_DebugValidate]`,
       `  Mode: ${debugStatus}`,
       ``,
+      `[Validation]`,
+      `  status=${validationRunner.getHudSummary().status} ` +
+      `(${validationRunner.getHudSummary().passed}/${validationRunner.getHudSummary().total} pass, ` +
+      `${validationRunner.getHudSummary().failed} fail)`,
+      `  scenario=${validationRunner.getHudSummary().currentScenario}`,
+      ``,
       `Frame: ${frame} | dt: ${(dt*1000).toFixed(2)}ms`
     ].join('\n');
   }
@@ -550,7 +603,7 @@ function animate() {
 animate();
 
 window.DNASpineArchitecture = {
-  sysA, sysB, DEBUG_STATE, EM_STATE,
+  sysA, sysB, DEBUG_STATE, EM_STATE, validationRunner,
   constants: {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
