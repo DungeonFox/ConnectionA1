@@ -95,6 +95,8 @@ const CALIBRATION_STATE = {
   alpha0Solved: ALPHA_0,
   residualAtAlpha0: Number.NaN,
   converged: false,
+  sampleEveryNFrames: 8,
+  lastFrame: -1,
   samples: 0,
   iterations: 0,
   candidateCount: 0,
@@ -214,6 +216,13 @@ function solveAlpha0FromRadialEquilibrium() {
 
   sysA.chemVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
   sysA.posTargetVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
+}
+
+function updateAlpha0Calibration() {
+  if ((frame % CALIBRATION_STATE.sampleEveryNFrames) !== 0) return;
+  solveAlpha0FromRadialEquilibrium();
+  CALIBRATION_STATE.lastFrame = frame;
+  sysA.architecture.alpha0Solved = CALIBRATION_STATE.alpha0Solved;
 }
 
 function updateResidualMetrics() {
@@ -732,9 +741,6 @@ function animate() {
   sysA.posTargetVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
 
-  solveAlpha0FromRadialEquilibrium();
-  sysA.architecture.alpha0Solved = CALIBRATION_STATE.alpha0Solved;
-
   sysA.accVar.material.uniforms.time.value = t;
   sysA.accVar.material.uniforms.dt.value = dt;
   sysA.velVar.material.uniforms.time.value = t;
@@ -765,6 +771,8 @@ function animate() {
   sysA.mat.uniforms.pos.value       = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
   sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
 
+  updateAlpha0Calibration();
+
   validationRunner.update();
   updateResidualMetrics();
 
@@ -790,6 +798,7 @@ function animate() {
       `[SF_HelixGenerator - MDPI Parameters]`,
       `  r=${arch.HELIX_R.toFixed(2)} h=${arch.PITCH.toFixed(2)} α_exp=${(arch.ALPHA_EXP * 180 / Math.PI).toFixed(1)}°`,
       `  α_0 solved=${(arch.alpha0Solved * 180 / Math.PI).toFixed(2)}° (residual ${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)})`,
+      `  solve=${CALIBRATION_STATE.converged ? 'converged' : 'no-root'} samples=${CALIBRATION_STATE.samples} scan=${CALIBRATION_STATE.candidateCount} (frame ${CALIBRATION_STATE.lastFrame})`,
       ``,
       `[EM FIELD - ${emStatus}]`,
       `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,

@@ -359,6 +359,15 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     (meanGap >= 0.0 && meanGap <= 1.25)
   );
 
+  const alpha0ResidualAbs = Number.isFinite(alphaCalibration?.residualAtAlpha0)
+    ? Math.abs(alphaCalibration.residualAtAlpha0)
+    : Number.POSITIVE_INFINITY;
+  const alpha0ResidualThreshold = criteria?.alpha0ResidualAbsMax ?? 1e-2;
+  const alpha0MinSamples = criteria?.alpha0MinSamples ?? 8;
+  const alpha0Converged = !!alphaCalibration?.converged;
+  const alpha0HasSamples = (alphaCalibration?.samples ?? 0) >= alpha0MinSamples;
+  const alpha0Pass = alpha0Converged && alpha0HasSamples && alpha0ResidualAbs <= alpha0ResidualThreshold;
+
   const metrics = {
     helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
     pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
@@ -437,18 +446,19 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       source: 'nearest-ext force proxy; raw -Fx/Mx variants mapped to qPitch via 1/(|ratio|*R^2)'
     },
     alpha0RadialEquilibrium: {
-      pass: alphaCalibration?.converged ? 1 : 0,
+      pass: alpha0Pass ? 1 : 0,
       total: 1,
-      ratio: alphaCalibration?.converged ? 1 : 0,
-      converged: !!alphaCalibration?.converged,
+      ratio: alpha0Pass ? 1 : 0,
+      thresholdResidualAbsMax: alpha0ResidualThreshold,
+      thresholdMinSamples: alpha0MinSamples,
+      converged: alpha0Converged,
       alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
-      residualFrAbs: Number.isFinite(alphaCalibration?.residualAtAlpha0)
-        ? Math.abs(alphaCalibration.residualAtAlpha0)
-        : null,
+      residualFrAbs: Number.isFinite(alpha0ResidualAbs) ? alpha0ResidualAbs : null,
       residualFrSigned: alphaCalibration?.residualAtAlpha0 ?? null,
       samples: alphaCalibration?.samples ?? 0,
       iterations: alphaCalibration?.iterations ?? 0,
       candidateCount: alphaCalibration?.candidateCount ?? 0,
+      hasEnoughSamples: alpha0HasSamples,
       alphaRange: {
         min: alphaCalibration?.minAlpha ?? null,
         max: alphaCalibration?.maxAlpha ?? null
@@ -513,7 +523,9 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveMinSamples: 10,
         conventionPhaseOffsetAbsErrMax: 3.5e-1,
         conventionMinSamples: 12,
-        conventionRequiredRatio: 6.5e-1
+        conventionRequiredRatio: 6.5e-1,
+        alpha0ResidualAbsMax: 1e-2,
+        alpha0MinSamples: 8
       }
     }
   };
