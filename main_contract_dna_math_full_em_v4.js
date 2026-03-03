@@ -93,6 +93,9 @@ const chemReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
 
 const CALIBRATION_STATE = {
   alpha0Solved: ALPHA_0,
+  alpha0Applied: ALPHA_0,
+  alpha0ManualOffset: 0.0,
+  calibrationEnabled: true,
   residualAtAlpha0: Number.NaN,
   converged: false,
   sampleEveryNFrames: 8,
@@ -104,18 +107,15 @@ const CALIBRATION_STATE = {
   maxAlpha: 0
 };
 
-const ALPHA_CONTROL_STATE = {
-  useSolvedAlpha0: true,
-  alphaCouplingStep: 1.0
-};
-
 const posReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
 const extReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
 
-function applyAlpha0Uniforms(alphaValue) {
-  sysA.chemVar.material.uniforms.alpha0.value = alphaValue;
-  sysA.posTargetVar.material.uniforms.alpha0.value = alphaValue;
-  sysA.accVar.material.uniforms.alpha0.value = alphaValue;
+function applyAlpha0ToRuntime() {
+  CALIBRATION_STATE.alpha0Applied = CALIBRATION_STATE.alpha0Solved + CALIBRATION_STATE.alpha0ManualOffset;
+  sysA.chemVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Applied;
+  sysA.posTargetVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Applied;
+  sysA.accVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Applied;
+  sysA.architecture.alpha0Solved = CALIBRATION_STATE.alpha0Applied;
 }
 
 function solveAlpha0FromRadialEquilibrium() {
@@ -225,15 +225,17 @@ function solveAlpha0FromRadialEquilibrium() {
   CALIBRATION_STATE.minAlpha = alphaMin;
   CALIBRATION_STATE.maxAlpha = alphaMax;
 
-  const alphaUniform = ALPHA_CONTROL_STATE.useSolvedAlpha0 ? CALIBRATION_STATE.alpha0Solved : ALPHA_0;
-  applyAlpha0Uniforms(alphaUniform);
+  applyAlpha0ToRuntime();
 }
 
 function updateAlpha0Calibration() {
+  if (!CALIBRATION_STATE.calibrationEnabled) {
+    applyAlpha0ToRuntime();
+    return;
+  }
   if ((frame % CALIBRATION_STATE.sampleEveryNFrames) !== 0) return;
   solveAlpha0FromRadialEquilibrium();
   CALIBRATION_STATE.lastFrame = frame;
-  sysA.architecture.alpha0Solved = CALIBRATION_STATE.alpha0Solved;
 }
 
 function updateResidualMetrics() {
@@ -681,30 +683,31 @@ window.addEventListener('keydown', (e) => {
     console.log(`[EM FIELD] Mode: ${modeName} (${EM_STATE.mode})`);
   }
 
-  if (e.key === 'u' || e.key === 'U') {
-    const next = setAlphaCoupling(sysA.accVar.material.uniforms.alphaCoupling.value + ALPHA_CONTROL_STATE.alphaCouplingStep);
-    console.log(`[α CONTROL] alphaCoupling=${next.toFixed(2)}`);
+  if (e.key === '[') {
+    sysA.accVar.material.uniforms.alphaCoupling.value = Math.max(0.0, sysA.accVar.material.uniforms.alphaCoupling.value - 1.0);
+    console.log(`[ALPHA] acc coupling: ${sysA.accVar.material.uniforms.alphaCoupling.value.toFixed(2)}`);
   }
 
-  if (e.key === 'j' || e.key === 'J') {
-    const next = setAlphaCoupling(sysA.accVar.material.uniforms.alphaCoupling.value - ALPHA_CONTROL_STATE.alphaCouplingStep);
-    console.log(`[α CONTROL] alphaCoupling=${next.toFixed(2)}`);
+  if (e.key === ']') {
+    sysA.accVar.material.uniforms.alphaCoupling.value = Math.min(80.0, sysA.accVar.material.uniforms.alphaCoupling.value + 1.0);
+    console.log(`[ALPHA] acc coupling: ${sysA.accVar.material.uniforms.alphaCoupling.value.toFixed(2)}`);
   }
 
-  if (e.key === 'm' || e.key === 'M') {
-    toggleAlphaSource();
+  if (e.key === '-' || e.key === '_') {
+    CALIBRATION_STATE.alpha0ManualOffset -= Math.PI / 180.0;
+    applyAlpha0ToRuntime();
+    console.log(`[ALPHA] alpha0 offset: ${(CALIBRATION_STATE.alpha0ManualOffset * 180 / Math.PI).toFixed(2)}°`);
   }
 
-  if (e.key === 'n' || e.key === 'N') {
-    triggerAlphaRecalibration();
+  if (e.key === '=' || e.key === '+') {
+    CALIBRATION_STATE.alpha0ManualOffset += Math.PI / 180.0;
+    applyAlpha0ToRuntime();
+    console.log(`[ALPHA] alpha0 offset: ${(CALIBRATION_STATE.alpha0ManualOffset * 180 / Math.PI).toFixed(2)}°`);
   }
 
-  if (e.key === 'i' || e.key === 'I') {
-    setCalibrationSampleEveryNFrames(CALIBRATION_STATE.sampleEveryNFrames - 1);
-  }
-
-  if (e.key === 'k' || e.key === 'K') {
-    setCalibrationSampleEveryNFrames(CALIBRATION_STATE.sampleEveryNFrames + 1);
+  if (e.key === 'p' || e.key === 'P') {
+    CALIBRATION_STATE.calibrationEnabled = !CALIBRATION_STATE.calibrationEnabled;
+    console.log(`[ALPHA] calibration ${CALIBRATION_STATE.calibrationEnabled ? 'LIVE' : 'PAUSED'}`);
   }
 });
 
@@ -862,13 +865,13 @@ function animate() {
       `=== DNA-Spine with EM Field ===`,
       `Z: zip | D: debug zip | C: debug Ca | E: EM toggle`,
       `R/F: EM radius +/- | T: EM mode`,
-      `U/J: α-coupling +/- | M: α source solved/fixed | N: recalibrate now | I/K: calib cadence`,
+      `[ / ]: α-coupling -/+ | - / =: α₀ offset -/+ 1° | P: pause/live α calibration`,
       ``,
       `[SF_HelixGenerator - MDPI Parameters]`,
       `  r=${arch.HELIX_R.toFixed(2)} h=${arch.PITCH.toFixed(2)} α_exp=${(arch.ALPHA_EXP * 180 / Math.PI).toFixed(1)}°`,
-      `  α_0 solved=${(arch.alpha0Solved * 180 / Math.PI).toFixed(2)}° (residual ${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)})`,
-      `  α source=${ALPHA_CONTROL_STATE.useSolvedAlpha0 ? 'solved' : 'fixed'} | α uniform=${(sysA.accVar.material.uniforms.alpha0.value * 180 / Math.PI).toFixed(2)}°`,
-      `  solve=${CALIBRATION_STATE.converged ? 'converged' : 'no-root'} samples=${CALIBRATION_STATE.samples} scan=${CALIBRATION_STATE.candidateCount} cadence=${CALIBRATION_STATE.sampleEveryNFrames}f (frame ${CALIBRATION_STATE.lastFrame})`,
+      `  α_0 solved(raw)=${(CALIBRATION_STATE.alpha0Solved * 180 / Math.PI).toFixed(2)}° | α_0 applied=${(arch.alpha0Solved * 180 / Math.PI).toFixed(2)}°`,
+      `  residual=${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)} | offset=${(CALIBRATION_STATE.alpha0ManualOffset * 180 / Math.PI).toFixed(2)}° | mode=${CALIBRATION_STATE.calibrationEnabled ? 'LIVE' : 'PAUSED'}`,
+      `  solve=${CALIBRATION_STATE.converged ? 'converged' : 'no-root'} samples=${CALIBRATION_STATE.samples} scan=${CALIBRATION_STATE.candidateCount} (frame ${CALIBRATION_STATE.lastFrame})`,
       ``,
       `[EM FIELD - ${emStatus}]`,
       `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,
@@ -909,10 +912,6 @@ window.DNASpineArchitecture = {
   sysA, sysB, DEBUG_STATE, EM_STATE, RESIDUAL_STATE, validationRunner,
   getResidualMetrics: () => ({ ...RESIDUAL_STATE }),
   getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
-  setAlphaCoupling,
-  toggleAlphaSource,
-  triggerAlphaRecalibration,
-  setCalibrationSampleEveryNFrames,
   constants: {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
@@ -923,5 +922,5 @@ window.DNASpineArchitecture = {
   }
 };
 
-console.log('[EM FIELD] Controls: E=toggle, R/F=radius, T=mode, U/J=alphaCoupling, M=alpha source, N=recalibrate, I/K=calib cadence');
+console.log('[EM FIELD] Controls: E=toggle, R/F=radius, T=mode');
 console.log('[EM FIELD] DNA α=' + (ALPHA_EXP * 180 / Math.PI).toFixed(1) + '° | solved α₀=' + (CALIBRATION_STATE.alpha0Solved * 180 / Math.PI).toFixed(2) + '° | residual=' + CALIBRATION_STATE.residualAtAlpha0.toExponential(2));

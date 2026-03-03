@@ -96,6 +96,9 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const strandBPhaseOffset = Number.isFinite(convention.strandBPhaseOffset) ? convention.strandBPhaseOffset : 1.5 * Math.PI;
   const angleUnitScale = Number.isFinite(convention.angleUnitScale) ? convention.angleUnitScale : 1.0;
 
+  const alphaRef = Number.isFinite(alphaCalibration?.alpha0Applied)
+    ? alphaCalibration.alpha0Applied
+        : alphaCalibration?.alpha0Solved;
   let activeNodes = 0;
   let radiusChecks = 0;
   let radiusPass = 0;
@@ -138,7 +141,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
 
     const tipIdx = idxSpineP0 + k * perSpine + (NECK_SEG - 1);
     const tipAlphaHat = chemPixels[tipIdx * 4 + 1];
-    if (Number.isFinite(alphaCalibration?.alpha0Solved) && Number.isFinite(tipAlphaHat)) {
+    if (Number.isFinite(alphaRef) && Number.isFinite(tipAlphaHat)) {
       if (tipAlphaHat < alphaCalibration.alpha0Solved) {
         alphaBelowCount += 1;
         alphaBelowGapSum += gGap;
@@ -391,7 +394,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const alpha0MinSamples = criteria?.alpha0MinSamples ?? 8;
   const alpha0Converged = !!alphaCalibration?.converged;
   const alpha0HasSamples = (alphaCalibration?.samples ?? 0) >= alpha0MinSamples;
-  const alpha0HasSignal = alpha0HasSamples && Number.isFinite(alphaCalibration?.alpha0Solved);
+  const alpha0HasSignal = alpha0HasSamples && Number.isFinite(alphaRef);
   const alpha0Pass = !emEnabled || !alpha0HasSignal || (
     alpha0Converged && alpha0ResidualAbs <= alpha0ResidualThreshold
   );
@@ -400,7 +403,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const accelWiringMinCoupling = criteria?.alpha0AccelWiringMinCoupling ?? 1e-3;
   const accAlpha0 = accCalibration?.alpha0;
   const accCoupling = accCalibration?.alphaCoupling;
-  const accelWiringHasSignal = Number.isFinite(accAlpha0) && Number.isFinite(accCoupling) && Number.isFinite(alphaCalibration?.alpha0Solved);
+  const accelWiringHasSignal = Number.isFinite(accAlpha0) && Number.isFinite(accCoupling) && Number.isFinite(alphaRef);
   const accelWiringAlphaErr = accelWiringHasSignal ? Math.abs(accAlpha0 - alphaCalibration.alpha0Solved) : null;
   const accelWiringPass = !emEnabled || !accelWiringHasSignal || (
     accelWiringAlphaErr <= accelWiringAlphaErrMax && accCoupling >= accelWiringMinCoupling
@@ -491,6 +494,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       thresholdMinSamples: alpha0MinSamples,
       converged: alpha0Converged,
       alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      alpha0Applied: alphaRef ?? null,
       residualFrAbs: Number.isFinite(alpha0ResidualAbs) ? alpha0ResidualAbs : null,
       residualFrSigned: alphaCalibration?.residualAtAlpha0 ?? null,
       samples: alphaCalibration?.samples ?? 0,
@@ -511,7 +515,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       ratio: alphaGapCouplingPass ? 1 : 0,
       thresholdMinSamples: alphaGapCouplingMinSamples,
       thresholdGapDeltaMin: alphaGapCouplingMinDelta,
-      alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      alpha0Solved: alphaRef ?? null,
       belowCount: alphaBelowCount,
       aboveCount: alphaAboveCount,
       belowGapMean: alphaBelowGapMean,
@@ -528,7 +532,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       ratio: accelWiringPass ? 1 : 0,
       thresholdAlphaErrAbsMax: accelWiringAlphaErrMax,
       thresholdCouplingMin: accelWiringMinCoupling,
-      alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      alpha0Solved: alphaRef ?? null,
       accAlpha0,
       accCoupling,
       accAlphaErrAbs: accelWiringAlphaErr,
