@@ -250,7 +250,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const qHatMinEstimatorErr = Math.min(qHatMeanErr, qHatMedianErr, qHatTrimmedErr);
   const qHatAvgAbsErr = qHatPitchScaledSamples.length
     ? qHatPitchScaledSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatPitchScaledSamples.length
-    : Number.POSITIVE_INFINITY;
+    : null;
 
   const qBacksolveThreshold = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
   const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 5e-1;
@@ -258,8 +258,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
   const qHatEstimatorSpread = Math.abs(qHatMean - qHatMedian);
   const qBacksolveHasSignal = qHatPitchScaledSamples.length >= qBacksolveMinSamples;
-  const qBacksolveDispersionPass = qHatAvgAbsErr <= qBacksolveAvgAbsErrThreshold;
-  const qBacksolveStabilityPass = qHatEstimatorSpread <= qBacksolveSpreadThreshold;
+  const qBacksolveDispersionPass = qBacksolveHasSignal ? qHatAvgAbsErr <= qBacksolveAvgAbsErrThreshold : null;
+  const qBacksolveStabilityPass = qBacksolveHasSignal ? qHatEstimatorSpread <= qBacksolveSpreadThreshold : null;
   const qBacksolvePass = !emEnabled || !qBacksolveHasSignal || (
     qHatMinEstimatorErr <= qBacksolveThreshold && (qBacksolveDispersionPass || qBacksolveStabilityPass)
   );
