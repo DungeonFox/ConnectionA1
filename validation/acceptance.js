@@ -51,7 +51,7 @@ function makeScenarioPlan(seedBase) {
   ];
 }
 
-function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMode, scenarioName, emEnabled }) {
+function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled }) {
   const {
     NODE_COUNT,
     NECK_SEG,
@@ -252,9 +252,17 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
     ? qHatPitchScaledSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatPitchScaledSamples.length
     : Number.POSITIVE_INFINITY;
 
-  const qBacksolveThreshold = 3.5e-1;
-  const qBacksolveHasSignal = qHatPitchScaledSamples.length >= 3;
-  const qBacksolvePass = !emEnabled || !qBacksolveHasSignal || qHatMinEstimatorErr <= qBacksolveThreshold;
+  const qBacksolveThreshold = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
+  const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 5e-1;
+  const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 3.5e-1;
+  const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
+  const qHatEstimatorSpread = Math.abs(qHatMean - qHatMedian);
+  const qBacksolveHasSignal = qHatPitchScaledSamples.length >= qBacksolveMinSamples;
+  const qBacksolveDispersionPass = qHatAvgAbsErr <= qBacksolveAvgAbsErrThreshold;
+  const qBacksolveStabilityPass = qHatEstimatorSpread <= qBacksolveSpreadThreshold;
+  const qBacksolvePass = !emEnabled || !qBacksolveHasSignal || (
+    qHatMinEstimatorErr <= qBacksolveThreshold && (qBacksolveDispersionPass || qBacksolveStabilityPass)
+  );
 
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
@@ -299,16 +307,22 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
       total: 1,
       ratio: qBacksolvePass ? 1 : 0,
       thresholdAbsErr: qBacksolveThreshold,
+      thresholdAvgAbsErr: qBacksolveAvgAbsErrThreshold,
+      thresholdEstimatorSpreadAbs: qBacksolveSpreadThreshold,
+      thresholdMinSamples: qBacksolveMinSamples,
       sampleCount: qHatPitchScaledSamples.length,
       qPitch: Q_PITCH,
       qHatMean,
       qHatMedian,
       qHatTrimmed,
+      qHatEstimatorSpread,
       qHatMeanErr,
       qHatMedianErr,
       qHatTrimmedErr,
       qHatMinEstimatorErr,
       qHatAvgAbsErr,
+      dispersionGatePass: qBacksolveDispersionPass,
+      stabilityGatePass: qBacksolveStabilityPass,
       qHatRawMean,
       qHatRawMedian,
       emEnabled,
@@ -366,6 +380,8 @@ export function createAcceptanceValidationRunner(config) {
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
         mdpiQBacksolveAbsErrMax: 3.5e-1,
+        mdpiQBacksolveAvgAbsErrMax: 5e-1,
+        mdpiQBacksolveEstimatorSpreadMax: 3.5e-1,
         mdpiQBacksolveMinSamples: 3
       }
     }
@@ -397,6 +413,7 @@ export function createAcceptanceValidationRunner(config) {
       chemPixels,
       extPixels,
       constants,
+      criteria: results.summary.criteria,
       zipMode: getZipMode(),
       scenarioName: s.name,
       emEnabled: !!s.emEnabled
