@@ -104,8 +104,19 @@ const CALIBRATION_STATE = {
   maxAlpha: 0
 };
 
+const ALPHA_CONTROL_STATE = {
+  useSolvedAlpha0: true,
+  alphaCouplingStep: 1.0
+};
+
 const posReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
 const extReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
+
+function applyAlpha0Uniforms(alphaValue) {
+  sysA.chemVar.material.uniforms.alpha0.value = alphaValue;
+  sysA.posTargetVar.material.uniforms.alpha0.value = alphaValue;
+  sysA.accVar.material.uniforms.alpha0.value = alphaValue;
+}
 
 function solveAlpha0FromRadialEquilibrium() {
   const posRT = sysA.gpu.getCurrentRenderTarget(sysA.posVar);
@@ -214,9 +225,8 @@ function solveAlpha0FromRadialEquilibrium() {
   CALIBRATION_STATE.minAlpha = alphaMin;
   CALIBRATION_STATE.maxAlpha = alphaMax;
 
-  sysA.chemVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
-  sysA.posTargetVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
-  sysA.accVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
+  const alphaUniform = ALPHA_CONTROL_STATE.useSolvedAlpha0 ? CALIBRATION_STATE.alpha0Solved : ALPHA_0;
+  applyAlpha0Uniforms(alphaUniform);
 }
 
 function updateAlpha0Calibration() {
@@ -670,7 +680,56 @@ window.addEventListener('keydown', (e) => {
     const modeName = EM_STATE.mode === 1.0 ? 'TUNNEL' : 'HELIX-TUNNEL';
     console.log(`[EM FIELD] Mode: ${modeName} (${EM_STATE.mode})`);
   }
+
+  if (e.key === 'u' || e.key === 'U') {
+    const next = setAlphaCoupling(sysA.accVar.material.uniforms.alphaCoupling.value + ALPHA_CONTROL_STATE.alphaCouplingStep);
+    console.log(`[α CONTROL] alphaCoupling=${next.toFixed(2)}`);
+  }
+
+  if (e.key === 'j' || e.key === 'J') {
+    const next = setAlphaCoupling(sysA.accVar.material.uniforms.alphaCoupling.value - ALPHA_CONTROL_STATE.alphaCouplingStep);
+    console.log(`[α CONTROL] alphaCoupling=${next.toFixed(2)}`);
+  }
+
+  if (e.key === 'm' || e.key === 'M') {
+    toggleAlphaSource();
+  }
+
+  if (e.key === 'n' || e.key === 'N') {
+    triggerAlphaRecalibration();
+  }
+
+  if (e.key === 'i' || e.key === 'I') {
+    setCalibrationSampleEveryNFrames(CALIBRATION_STATE.sampleEveryNFrames - 1);
+  }
+
+  if (e.key === 'k' || e.key === 'K') {
+    setCalibrationSampleEveryNFrames(CALIBRATION_STATE.sampleEveryNFrames + 1);
+  }
 });
+
+function setAlphaCoupling(value) {
+  const coupling = Math.max(0.0, Math.min(60.0, value));
+  sysA.accVar.material.uniforms.alphaCoupling.value = coupling;
+  return coupling;
+}
+
+function toggleAlphaSource() {
+  ALPHA_CONTROL_STATE.useSolvedAlpha0 = !ALPHA_CONTROL_STATE.useSolvedAlpha0;
+  const alphaUniform = ALPHA_CONTROL_STATE.useSolvedAlpha0 ? CALIBRATION_STATE.alpha0Solved : ALPHA_0;
+  applyAlpha0Uniforms(alphaUniform);
+  console.log(`[α CONTROL] alpha0 source: ${ALPHA_CONTROL_STATE.useSolvedAlpha0 ? 'solved' : 'fixed ALPHA_0'} (${(alphaUniform * 180 / Math.PI).toFixed(2)}°)`);
+}
+
+function triggerAlphaRecalibration() {
+  solveAlpha0FromRadialEquilibrium();
+  console.log(`[α CONTROL] recalibrated alpha0Solved=${(CALIBRATION_STATE.alpha0Solved * 180 / Math.PI).toFixed(2)}° residual=${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)}`);
+}
+
+function setCalibrationSampleEveryNFrames(value) {
+  CALIBRATION_STATE.sampleEveryNFrames = Math.max(1, Math.min(120, Math.round(value)));
+  console.log(`[α CONTROL] calibration sampleEveryNFrames=${CALIBRATION_STATE.sampleEveryNFrames}`);
+}
 
 function setEMEnabled(enabled) {
   EM_STATE.enabled = !!enabled;
@@ -803,11 +862,13 @@ function animate() {
       `=== DNA-Spine with EM Field ===`,
       `Z: zip | D: debug zip | C: debug Ca | E: EM toggle`,
       `R/F: EM radius +/- | T: EM mode`,
+      `U/J: α-coupling +/- | M: α source solved/fixed | N: recalibrate now | I/K: calib cadence`,
       ``,
       `[SF_HelixGenerator - MDPI Parameters]`,
       `  r=${arch.HELIX_R.toFixed(2)} h=${arch.PITCH.toFixed(2)} α_exp=${(arch.ALPHA_EXP * 180 / Math.PI).toFixed(1)}°`,
       `  α_0 solved=${(arch.alpha0Solved * 180 / Math.PI).toFixed(2)}° (residual ${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)})`,
-      `  solve=${CALIBRATION_STATE.converged ? 'converged' : 'no-root'} samples=${CALIBRATION_STATE.samples} scan=${CALIBRATION_STATE.candidateCount} (frame ${CALIBRATION_STATE.lastFrame})`,
+      `  α source=${ALPHA_CONTROL_STATE.useSolvedAlpha0 ? 'solved' : 'fixed'} | α uniform=${(sysA.accVar.material.uniforms.alpha0.value * 180 / Math.PI).toFixed(2)}°`,
+      `  solve=${CALIBRATION_STATE.converged ? 'converged' : 'no-root'} samples=${CALIBRATION_STATE.samples} scan=${CALIBRATION_STATE.candidateCount} cadence=${CALIBRATION_STATE.sampleEveryNFrames}f (frame ${CALIBRATION_STATE.lastFrame})`,
       ``,
       `[EM FIELD - ${emStatus}]`,
       `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,
@@ -848,6 +909,10 @@ window.DNASpineArchitecture = {
   sysA, sysB, DEBUG_STATE, EM_STATE, RESIDUAL_STATE, validationRunner,
   getResidualMetrics: () => ({ ...RESIDUAL_STATE }),
   getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
+  setAlphaCoupling,
+  toggleAlphaSource,
+  triggerAlphaRecalibration,
+  setCalibrationSampleEveryNFrames,
   constants: {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
@@ -858,5 +923,5 @@ window.DNASpineArchitecture = {
   }
 };
 
-console.log('[EM FIELD] Controls: E=toggle, R/F=radius, T=mode');
+console.log('[EM FIELD] Controls: E=toggle, R/F=radius, T=mode, U/J=alphaCoupling, M=alpha source, N=recalibrate, I/K=calib cadence');
 console.log('[EM FIELD] DNA α=' + (ALPHA_EXP * 180 / Math.PI).toFixed(1) + '° | solved α₀=' + (CALIBRATION_STATE.alpha0Solved * 180 / Math.PI).toFixed(2) + '° | residual=' + CALIBRATION_STATE.residualAtAlpha0.toExponential(2));
