@@ -171,6 +171,13 @@ export function createChemShader() {
       return vec2(CaGrow, CaShrink);
     }
 
+    float alphaUnzipPressureForNode(float kNode, float idxSpineP0, float perSpine, float neck){
+      float tipIdx = idxSpineP0 + kNode * perSpine + (neck - 1.0);
+      float alphaHatTip = readChem(tipIdx).y;
+      float alphaDeficit = max(alpha0 - alphaHatTip, 0.0);
+      return smoothstep(0.01, 0.35, alphaDeficit);
+    }
+
     vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt){
       // RS_Channels: x=segment, y=progress(s), z=role/tag, w=transition/event
       float seg = clamp(floor(state.x + 0.5), 0.0, 5.0);
