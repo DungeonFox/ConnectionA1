@@ -63,7 +63,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     ALPHA_EXP,
     U_S,
     DS,
-    IDX_RUNG0
+    IDX_RUNG0,
+    HELIX_CONVENTION
   } = constants;
 
   const perSpine = NECK_SEG;
@@ -71,11 +72,20 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const idxStrandB0 = NODE_COUNT * 2;
   const idxSpineP0 = NODE_COUNT * 3;
 
+  const convention = HELIX_CONVENTION || {};
+  const handednessSign = Number.isFinite(convention.handednessSign) ? convention.handednessSign : 1.0;
+  const angleUnitScale = Number.isFinite(convention.angleUnitScale) ? convention.angleUnitScale : 1.0;
+  const phaseOffsetA = Number.isFinite(convention.phaseOffsetA) ? convention.phaseOffsetA : 0.0;
+  const phaseOffsetB = Number.isFinite(convention.phaseOffsetB) ? convention.phaseOffsetB : Math.PI;
+  const expectedOffset = wrapAnglePi((phaseOffsetB - phaseOffsetA) * angleUnitScale + handednessSign * Q_PITCH * AXIAL_SHIFT * angleUnitScale);
+
   let activeNodes = 0;
   let radiusChecks = 0;
   let radiusPass = 0;
   let phaseChecks = 0;
   let phasePass = 0;
+  let conventionChecks = 0;
+  let conventionPass = 0;
   let hubChecks = 0;
   let hubPass = 0;
   let rungChecks = 0;
@@ -194,6 +204,33 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     if (d0 < d1 && d1 < da + 1e-3) rungPass++;
     if (d2 < d3 && d3 < db + 1e-3) rungPass++;
 
+
+    const pa = [a[0] - hub[0], a[1] - hub[1], a[2] - hub[2]];
+    const pb = [b[0] - hub[0], b[1] - hub[1], b[2] - hub[2]];
+    const qa = Math.hypot(pa[0], pa[1], pa[2]);
+    const qb = Math.hypot(pb[0], pb[1], pb[2]);
+    const pmNode = vec3At(posPixels, Math.max(0, k - 1));
+    const ppNode = vec3At(posPixels, Math.min(NODE_COUNT - 1, k + 1));
+    const tNodeRaw = [ppNode[0] - pmNode[0], ppNode[1] - pmNode[1], ppNode[2] - pmNode[2]];
+    const tNodeLen = Math.hypot(tNodeRaw[0], tNodeRaw[1], tNodeRaw[2]);
+    if (qa > 1e-6 && qb > 1e-6 && tNodeLen > 1e-6) {
+      const tNode = [tNodeRaw[0] / tNodeLen, tNodeRaw[1] / tNodeLen, tNodeRaw[2] / tNodeLen];
+      const paN = [pa[0] / qa, pa[1] / qa, pa[2] / qa];
+      const pbN = [pb[0] / qb, pb[1] / qb, pb[2] / qb];
+      const crossAB = [
+        paN[1] * pbN[2] - paN[2] * pbN[1],
+        paN[2] * pbN[0] - paN[0] * pbN[2],
+        paN[0] * pbN[1] - paN[1] * pbN[0]
+      ];
+      const windingSignObserved = Math.sign(crossAB[0] * tNode[0] + crossAB[1] * tNode[1] + crossAB[2] * tNode[2]);
+      const expectedWindingSign = Math.sign(handednessSign || 1.0);
+      const phaseOffsetObserved = wrapAnglePi(Math.atan2(pbN[2], pbN[0]) - Math.atan2(paN[2], paN[0]));
+      conventionChecks += 1;
+      const windingMatch = windingSignObserved === 0 || expectedWindingSign === 0 ? false : windingSignObserved === expectedWindingSign;
+      const phaseMatch = Math.abs(wrapAnglePi(phaseOffsetObserved - expectedOffset)) <= 0.45;
+      if (windingMatch && phaseMatch) conventionPass += 1;
+    }
+
     if (k > 0) {
       const prevPhi = chemPixels[(k - 1) * 4 + 1];
       const w = chemPixels[k * 4 + 3];
@@ -311,6 +348,14 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       chosenConvention: uConvention,
       uExpected,
       absError: Math.min(uErrSigned, uErrNeg)
+    },
+    conventionSanity: {
+      pass: conventionPass,
+      total: conventionChecks,
+      ratio: conventionChecks ? conventionPass / conventionChecks : 0,
+      requiredRatio: topologyMinRatio,
+      expectedWindingSign: Math.sign(handednessSign || 1.0),
+      expectedPhaseOffset: expectedOffset
     },
     qBacksolveConsistency: {
       pass: qBacksolvePass ? 1 : 0,

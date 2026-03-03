@@ -39,6 +39,11 @@ export function createChemShader() {
     uniform float u_s;
     uniform float alpha0;
 
+    uniform float helixHandednessSign;
+    uniform float phaseOffsetA;
+    uniform float phaseOffsetB;
+    uniform float angleUnitScale;
+
     vec2 uvFromIndex(float idx){
       float x = mod(idx, resolution.x);
       float y = floor(idx / resolution.x);
@@ -295,7 +300,7 @@ export function createChemShader() {
         c.w = clamp(c.w, -0.25, 0.25);
 
         // Helix phase propagation: φ_k = φ_{k-1} + q*ds + gRot
-        float dphi = qPitch * ds + c.w;
+        float dphi = helixHandednessSign * (qPitch * ds + c.w) * angleUnitScale;
         c.y = mod(cPrev.y + dphi, 2.0 * PI);
 
         gl_FragColor = c;
@@ -415,6 +420,11 @@ export function createCoupledPosTargetShader() {
     uniform float alphaExp;
     uniform float u_s;
     uniform float alpha0;
+
+    uniform float helixHandednessSign;
+    uniform float phaseOffsetA;
+    uniform float phaseOffsetB;
+    uniform float angleUnitScale;
 
     vec2 uvFromIndex(float idx){
       float x = mod(idx, resolution.x);
@@ -615,11 +625,11 @@ export function createCoupledPosTargetShader() {
         float R = helixR + gGap;
 
         // Axial shift implies phase shift: Δθ = q*Δx
-        float dThetaAxial = qP * axialShift;
+        float dThetaAxial = helixHandednessSign * qP * axialShift * angleUnitScale;
 
         // MDPI Eq. (12): Strand A and B with phase offset
-        float phiA = phi - 0.5 * gapPhase;
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiA = phi + phaseOffsetA * angleUnitScale - 0.5 * gapPhase;
+        float phiB = phi + phaseOffsetB * angleUnitScale + dThetaAxial + 0.5 * gapPhase;
 
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 baseB = p0 + 0.5 * t * axialShift;
@@ -695,7 +705,7 @@ export function createCoupledPosTargetShader() {
         // MDPI: Strand A with gap phase
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float phiA = phi - 0.5 * gapPhase;
+        float phiA = phi + phaseOffsetA * angleUnitScale - 0.5 * gapPhase;
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 dest = baseA + R * (cos(phiA) * N + sin(phiA) * B);
 
@@ -734,9 +744,9 @@ export function createCoupledPosTargetShader() {
         float qP = qPitch;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float dThetaAxial = qP * axialShift;
+        float dThetaAxial = helixHandednessSign * qP * axialShift * angleUnitScale;
 
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiB = phi + phaseOffsetB * angleUnitScale + dThetaAxial + 0.5 * gapPhase;
         vec3 baseB = p0 + 0.5 * t * axialShift;
         vec3 dest = baseB + R * (cos(phiB) * N + sin(phiB) * B);
 
@@ -783,10 +793,10 @@ export function createCoupledPosTargetShader() {
         float qP = qPitch;
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float dThetaAxial = qP * axialShift;
+        float dThetaAxial = helixHandednessSign * qP * axialShift * angleUnitScale;
 
-        float phiA = phi - 0.5 * gapPhase;
-        float phiB = phi + PI + dThetaAxial + 0.5 * gapPhase;
+        float phiA = phi + phaseOffsetA * angleUnitScale - 0.5 * gapPhase;
+        float phiB = phi + phaseOffsetB * angleUnitScale + dThetaAxial + 0.5 * gapPhase;
 
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 baseB = p0 + 0.5 * t * axialShift;
