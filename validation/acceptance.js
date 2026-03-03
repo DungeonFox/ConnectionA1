@@ -69,7 +69,7 @@ function makeScenarioPlan(seedBase) {
   ];
 }
 
-function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled }) {
+function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled, alphaCalibration }) {
   const {
     NODE_COUNT,
     NECK_SEG,
@@ -435,6 +435,25 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       hasSignal: qBacksolveHasSignal,
       skipped: !emEnabled || !qBacksolveHasSignal,
       source: 'nearest-ext force proxy; raw -Fx/Mx variants mapped to qPitch via 1/(|ratio|*R^2)'
+    },
+    alpha0RadialEquilibrium: {
+      pass: alphaCalibration?.converged ? 1 : 0,
+      total: 1,
+      ratio: alphaCalibration?.converged ? 1 : 0,
+      converged: !!alphaCalibration?.converged,
+      alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      residualFrAbs: Number.isFinite(alphaCalibration?.residualAtAlpha0)
+        ? Math.abs(alphaCalibration.residualAtAlpha0)
+        : null,
+      residualFrSigned: alphaCalibration?.residualAtAlpha0 ?? null,
+      samples: alphaCalibration?.samples ?? 0,
+      iterations: alphaCalibration?.iterations ?? 0,
+      candidateCount: alphaCalibration?.candidateCount ?? 0,
+      alphaRange: {
+        min: alphaCalibration?.minAlpha ?? null,
+        max: alphaCalibration?.maxAlpha ?? null
+      },
+      source: 'runtime alpha scan solver using force-direction projection and radial frame proxy F_r(alpha)=0'
     }
   };
 
@@ -465,6 +484,7 @@ export function createAcceptanceValidationRunner(config) {
     setEMRadius,
     setEMTwist,
     getZipMode,
+    getAlphaCalibration,
     texSize
   } = config;
 
@@ -527,7 +547,8 @@ export function createAcceptanceValidationRunner(config) {
       criteria: results.summary.criteria,
       zipMode: getZipMode(),
       scenarioName: s.name,
-      emEnabled: !!s.emEnabled
+      emEnabled: !!s.emEnabled,
+      alphaCalibration: getAlphaCalibration ? getAlphaCalibration() : null
     });
 
     const record = {

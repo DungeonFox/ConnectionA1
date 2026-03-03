@@ -6,7 +6,9 @@ import { createPosTargetShader, createAccShader, createVelShader, createPosShade
 import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
-  createCoupledPosTargetShader
+  createCoupledPosTargetShader,
+  normalizeVec3,
+  inferAlphaHatFromForceComponents
 } from './coupledShadersContract_dna_math_full_em_v4.js';
 import { createAcceptanceValidationRunner } from './validation/acceptance.js';
 
@@ -88,6 +90,131 @@ const RESIDUAL_STATE = {
 };
 
 const chemReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
+
+const CALIBRATION_STATE = {
+  alpha0Solved: ALPHA_0,
+  residualAtAlpha0: Number.NaN,
+  converged: false,
+  samples: 0,
+  iterations: 0,
+  candidateCount: 0,
+  minAlpha: 0,
+  maxAlpha: 0
+};
+
+const posReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
+const extReadbackBuffer = new Float32Array(TEX_SIZE * TEX_SIZE * 4);
+
+function solveAlpha0FromRadialEquilibrium() {
+  const posRT = sysA.gpu.getCurrentRenderTarget(sysA.posVar);
+  const extRT = sysB.gpu.getCurrentRenderTarget(sysB.posVar);
+  renderer.readRenderTargetPixels(posRT, 0, 0, TEX_SIZE, TEX_SIZE, posReadbackBuffer);
+  renderer.readRenderTargetPixels(extRT, 0, 0, TEX_SIZE, TEX_SIZE, extReadbackBuffer);
+
+  const extActive = [];
+  for (let i = 0; i < COUNT; i++) {
+    const i4 = i * 4;
+    const tag = Math.floor(extReadbackBuffer[i4 + 3] + 1e-4);
+    if (tag < 1) continue;
+    extActive.push([extReadbackBuffer[i4], extReadbackBuffer[i4 + 1], extReadbackBuffer[i4 + 2]]);
+  }
+
+  const idxSpineP0 = NODE_COUNT + 2 * NODE_COUNT;
+  const alphaMin = 12.0 * Math.PI / 180.0;
+  const alphaMax = 80.0 * Math.PI / 180.0;
+  const candidateCount = 69;
+  const candidateStep = (alphaMax - alphaMin) / (candidateCount - 1);
+  const alphaCandidates = Array.from({ length: candidateCount }, (_, i) => alphaMin + i * candidateStep);
+  const residualSums = new Float64Array(candidateCount);
+
+  let sampleCount = 0;
+  for (let k = 1; k < NODE_COUNT - 1; k++) {
+    const k4 = k * 4;
+    const p0 = [posReadbackBuffer[k4], posReadbackBuffer[k4 + 1], posReadbackBuffer[k4 + 2]];
+    const km4 = (k - 1) * 4;
+    const kp4 = (k + 1) * 4;
+    const t = normalizeVec3([
+      posReadbackBuffer[kp4] - posReadbackBuffer[km4],
+      posReadbackBuffer[kp4 + 1] - posReadbackBuffer[km4 + 1],
+      posReadbackBuffer[kp4 + 2] - posReadbackBuffer[km4 + 2]
+    ]);
+    if (!t) continue;
+
+    const hubIdx = idxSpineP0 + k * PER_SPINE + (NECK_SEG - 1);
+    const hub4 = hubIdx * 4;
+    const radial = normalizeVec3([
+      p0[0] - posReadbackBuffer[hub4],
+      p0[1] - posReadbackBuffer[hub4 + 1],
+      p0[2] - posReadbackBuffer[hub4 + 2]
+    ]);
+    if (!radial) continue;
+
+    let nearest = null;
+    let d2Min = Number.POSITIVE_INFINITY;
+    for (const q of extActive) {
+      const dx = q[0] - p0[0];
+      const dy = q[1] - p0[1];
+      const dz = q[2] - p0[2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < d2Min) {
+        d2Min = d2;
+        nearest = [dx, dy, dz];
+      }
+    }
+    if (!nearest) continue;
+
+    const forceDir = normalizeVec3(nearest);
+    if (!forceDir) continue;
+
+    const components = inferAlphaHatFromForceComponents(forceDir, t);
+    const fRadial = Math.abs(
+      forceDir[0] * radial[0] +
+      forceDir[1] * radial[1] +
+      forceDir[2] * radial[2]
+    );
+
+    for (let c = 0; c < candidateCount; c++) {
+      const alpha = alphaCandidates[c];
+      const radialProxy = fRadial * Math.cos(alpha) - components.fParallel * Math.sin(alpha);
+      residualSums[c] += radialProxy;
+    }
+    sampleCount += 1;
+  }
+
+  const residuals = alphaCandidates.map((_, i) => sampleCount > 0 ? residualSums[i] / sampleCount : Number.NaN);
+  let bestIdx = 0;
+  let bestAbs = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < residuals.length; i++) {
+    const absVal = Math.abs(residuals[i]);
+    if (absVal < bestAbs) {
+      bestAbs = absVal;
+      bestIdx = i;
+    }
+  }
+
+  let converged = false;
+  for (let i = 1; i < residuals.length; i++) {
+    const a = residuals[i - 1];
+    const b = residuals[i];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (a === 0.0 || b === 0.0 || (a < 0.0 && b > 0.0) || (a > 0.0 && b < 0.0)) {
+      converged = true;
+      break;
+    }
+  }
+
+  CALIBRATION_STATE.alpha0Solved = alphaCandidates[bestIdx] ?? ALPHA_0;
+  CALIBRATION_STATE.residualAtAlpha0 = residuals[bestIdx] ?? Number.NaN;
+  CALIBRATION_STATE.converged = converged && sampleCount > 0;
+  CALIBRATION_STATE.samples = sampleCount;
+  CALIBRATION_STATE.iterations = candidateCount;
+  CALIBRATION_STATE.candidateCount = candidateCount;
+  CALIBRATION_STATE.minAlpha = alphaMin;
+  CALIBRATION_STATE.maxAlpha = alphaMax;
+
+  sysA.chemVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
+  sysA.posTargetVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
+}
 
 function updateResidualMetrics() {
   if ((frame % RESIDUAL_STATE.sampleEveryNFrames) !== 0) return;
@@ -441,6 +568,7 @@ function makeSystemA(getExtTexture) {
       IDX_RUNG0, RUNG_COUNT, RENDER_COUNT,
       HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
       COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+      alpha0Solved: CALIBRATION_STATE.alpha0Solved,
       HELIX_CONVENTION
     }
   };
@@ -451,6 +579,11 @@ const sysA = makeSystemA(() => sysB.posVar.material.uniforms.pos.value);
 
 // Bind System B as EM field source for System A
 sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+
+// Warm-up compute once before calibration so force/proxy uses initialized textures.
+sysB.gpu.compute();
+sysA.gpu.compute();
+solveAlpha0FromRadialEquilibrium();
 
 // ==================== CONTROLS ====================
 window.addEventListener('keydown', (e) => {
@@ -571,6 +704,7 @@ const validationRunner = createAcceptanceValidationRunner({
   setEMRadius,
   setEMTwist,
   getZipMode: () => zipMode,
+  getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
   texSize: TEX_SIZE
 });
 
@@ -597,6 +731,9 @@ function animate() {
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
+
+  solveAlpha0FromRadialEquilibrium();
+  sysA.architecture.alpha0Solved = CALIBRATION_STATE.alpha0Solved;
 
   sysA.accVar.material.uniforms.time.value = t;
   sysA.accVar.material.uniforms.dt.value = dt;
@@ -652,7 +789,7 @@ function animate() {
       ``,
       `[SF_HelixGenerator - MDPI Parameters]`,
       `  r=${arch.HELIX_R.toFixed(2)} h=${arch.PITCH.toFixed(2)} α_exp=${(arch.ALPHA_EXP * 180 / Math.PI).toFixed(1)}°`,
-      `  α_0=${(arch.ALPHA_0 * 180 / Math.PI).toFixed(1)}° (critical angle)`,
+      `  α_0 solved=${(arch.alpha0Solved * 180 / Math.PI).toFixed(2)}° (residual ${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)})`,
       ``,
       `[EM FIELD - ${emStatus}]`,
       `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,
@@ -690,14 +827,16 @@ animate();
 window.DNASpineArchitecture = {
   sysA, sysB, DEBUG_STATE, EM_STATE, RESIDUAL_STATE, validationRunner,
   getResidualMetrics: () => ({ ...RESIDUAL_STATE }),
+  getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
   constants: {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
     HELIX_R, PITCH, AXIAL_SHIFT, DS,
     Q_PITCH, COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+    alpha0Solved: CALIBRATION_STATE.alpha0Solved,
     HELIX_CONVENTION
   }
 };
 
 console.log('[EM FIELD] Controls: E=toggle, R/F=radius, T=mode');
-console.log('[EM FIELD] DNA α=' + (ALPHA_EXP * 180 / Math.PI).toFixed(1) + '° < α₀=' + (ALPHA_0 * 180 / Math.PI).toFixed(1) + '° → EM causes REPULSION');
+console.log('[EM FIELD] DNA α=' + (ALPHA_EXP * 180 / Math.PI).toFixed(1) + '° | solved α₀=' + (CALIBRATION_STATE.alpha0Solved * 180 / Math.PI).toFixed(2) + '° | residual=' + CALIBRATION_STATE.residualAtAlpha0.toExponential(2));

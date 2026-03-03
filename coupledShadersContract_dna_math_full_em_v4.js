@@ -5,6 +5,55 @@
 import { hash12 } from './glslNoise.js';
 import { PI } from './glslUtils.js';
 
+const EPS = 1e-6;
+
+export function normalizeVec3(v) {
+  const len = Math.hypot(v[0], v[1], v[2]);
+  if (len <= EPS) return null;
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+export function inferAlphaHatFromForceComponents(forceDir, tangent) {
+  const fDotT =
+    forceDir[0] * tangent[0] +
+    forceDir[1] * tangent[1] +
+    forceDir[2] * tangent[2];
+  const fParallel = Math.abs(fDotT);
+  const proj = [
+    tangent[0] * fDotT,
+    tangent[1] * fDotT,
+    tangent[2] * fDotT
+  ];
+  const perp = [
+    forceDir[0] - proj[0],
+    forceDir[1] - proj[1],
+    forceDir[2] - proj[2]
+  ];
+  const fPerp = Math.hypot(perp[0], perp[1], perp[2]);
+  return {
+    alphaHat: Math.atan2(fParallel, Math.max(fPerp, EPS)),
+    fParallel,
+    fPerp
+  };
+}
+
+export function inferQHatFromMomentComponents(forceDir, tangent, radial, R, qRef) {
+  const fParallel = Math.abs(
+    forceDir[0] * tangent[0] +
+    forceDir[1] * tangent[1] +
+    forceDir[2] * tangent[2]
+  );
+  const moment = [
+    radial[1] * forceDir[2] - radial[2] * forceDir[1],
+    radial[2] * forceDir[0] - radial[0] * forceDir[2],
+    radial[0] * forceDir[1] - radial[1] * forceDir[0]
+  ];
+  const momentT = moment[0] * tangent[0] + moment[1] * tangent[1] + moment[2] * tangent[2];
+  const qMag = Math.abs(momentT) / Math.max(fParallel * R * R, EPS);
+  const qSign = qRef >= 0.0 ? 1.0 : -1.0;
+  return qSign * qMag;
+}
+
 // ==================== ARCHITECTURE: SF_SpineDynamics ====================
 // Calcium compartment ODE with influx/pump/diffusion
 // Bell-shaped Ca-dependent growth/zip pressure
