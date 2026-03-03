@@ -711,6 +711,29 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+function setAlphaCoupling(value) {
+  const coupling = Math.max(0.0, Math.min(60.0, value));
+  sysA.accVar.material.uniforms.alphaCoupling.value = coupling;
+  return coupling;
+}
+
+function toggleAlphaSource() {
+  ALPHA_CONTROL_STATE.useSolvedAlpha0 = !ALPHA_CONTROL_STATE.useSolvedAlpha0;
+  const alphaUniform = ALPHA_CONTROL_STATE.useSolvedAlpha0 ? CALIBRATION_STATE.alpha0Solved : ALPHA_0;
+  applyAlpha0Uniforms(alphaUniform);
+  console.log(`[α CONTROL] alpha0 source: ${ALPHA_CONTROL_STATE.useSolvedAlpha0 ? 'solved' : 'fixed ALPHA_0'} (${(alphaUniform * 180 / Math.PI).toFixed(2)}°)`);
+}
+
+function triggerAlphaRecalibration() {
+  solveAlpha0FromRadialEquilibrium();
+  console.log(`[α CONTROL] recalibrated alpha0Solved=${(CALIBRATION_STATE.alpha0Solved * 180 / Math.PI).toFixed(2)}° residual=${CALIBRATION_STATE.residualAtAlpha0.toExponential(2)}`);
+}
+
+function setCalibrationSampleEveryNFrames(value) {
+  CALIBRATION_STATE.sampleEveryNFrames = Math.max(1, Math.min(120, Math.round(value)));
+  console.log(`[α CONTROL] calibration sampleEveryNFrames=${CALIBRATION_STATE.sampleEveryNFrames}`);
+}
+
 function setEMEnabled(enabled) {
   EM_STATE.enabled = !!enabled;
   const emSamples = EM_STATE.enabled ? EM_STATE.samples : 0.0;
