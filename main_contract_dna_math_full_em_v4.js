@@ -44,6 +44,14 @@ const ALPHA_EXP = Math.atan(PITCH / (2.0 * Math.PI * HELIX_R));
 const U_S = 0.5 * COT_ALPHA;
 const ALPHA_0 = 38.0 * Math.PI / 180.0;
 
+const HELIX_CONVENTION = {
+  handednessSign: 1.0,
+  strandPhaseA: 0.5 * Math.PI,
+  strandPhaseB: 1.5 * Math.PI,
+  phaseGapSign: 1.0,
+  angleUnitRadians: 1.0
+};
+
 // ==================== ARCHITECTURE: EM FIELD CONTROLS ====================
 // EM (Electromagnetic) field state
 const EM_STATE = {
@@ -312,6 +320,7 @@ function makeSystemA(getExtTexture) {
     ds: { value: DS },
     pitch: { value: PITCH },
     qPitch: { value: Q_PITCH },
+    helixHandedness: { value: HELIX_CONVENTION.handednessSign },
     zipMode: { value: zipMode },
     flowEnabled: { value: 1.0 },
     extPos: { value: getExtTexture() },
@@ -337,6 +346,11 @@ function makeSystemA(getExtTexture) {
     pitch: { value: PITCH },
     qPitch: { value: Q_PITCH },
     axialShift: { value: AXIAL_SHIFT },
+    helixHandedness: { value: HELIX_CONVENTION.handednessSign },
+    strandPhaseA: { value: HELIX_CONVENTION.strandPhaseA },
+    strandPhaseB: { value: HELIX_CONVENTION.strandPhaseB },
+    phaseGapSign: { value: HELIX_CONVENTION.phaseGapSign },
+    angleUnitRadians: { value: HELIX_CONVENTION.angleUnitRadians },
     extPos: { value: getExtTexture() },
     extSamples: { value: EM_STATE.enabled ? EM_STATE.samples : 0.0 },
     extRadius: { value: EM_STATE.radius },
@@ -425,7 +439,8 @@ function makeSystemA(getExtTexture) {
       NODE_COUNT, NECK_SEG, HEAD_COUNT, 
       IDX_RUNG0, RUNG_COUNT, RENDER_COUNT,
       HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
-      COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0
+      COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+      HELIX_CONVENTION
     }
   };
 }
@@ -545,7 +560,8 @@ const validationRunner = createAcceptanceValidationRunner({
     TEX_SIZE, NODE_COUNT, NECK_SEG,
     HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
     COT_ALPHA, ALPHA_EXP, U_S,
-    DS, IDX_RUNG0
+    DS, IDX_RUNG0,
+    HELIX_CONVENTION
   },
   emState: EM_STATE,
   setTargetZipMode: (value) => { targetZipMode = value; },
@@ -677,7 +693,8 @@ window.DNASpineArchitecture = {
     TEX_SIZE, COUNT, NODE_COUNT, NECK_SEG, HEAD_COUNT,
     RENDER_COUNT, IDX_RUNG0, RUNG_COUNT,
     HELIX_R, PITCH, AXIAL_SHIFT, DS,
-    Q_PITCH, COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0
+    Q_PITCH, COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+    HELIX_CONVENTION
   }
 };
 

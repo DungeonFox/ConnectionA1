@@ -28,6 +28,15 @@ function dist(a, b) {
   return Math.hypot(dx, dy, dz);
 }
 
+function signedAngleAroundAxis(fromVec, toVec, axis) {
+  const dotVal = fromVec[0] * toVec[0] + fromVec[1] * toVec[1] + fromVec[2] * toVec[2];
+  const cx = fromVec[1] * toVec[2] - fromVec[2] * toVec[1];
+  const cy = fromVec[2] * toVec[0] - fromVec[0] * toVec[2];
+  const cz = fromVec[0] * toVec[1] - fromVec[1] * toVec[0];
+  const sinVal = axis[0] * cx + axis[1] * cy + axis[2] * cz;
+  return Math.atan2(sinVal, dotVal);
+}
+
 function wrapAnglePi(a) {
   let v = a;
   while (v > Math.PI) v -= TWO_PI;
@@ -63,7 +72,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     ALPHA_EXP,
     U_S,
     DS,
-    IDX_RUNG0
+    IDX_RUNG0,
+    HELIX_CONVENTION
   } = constants;
 
   const perSpine = NECK_SEG;
@@ -80,9 +90,19 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   let hubPass = 0;
   let rungChecks = 0;
   let rungPass = 0;
+  let conventionChecks = 0;
+  let conventionPass = 0;
   let gapSum = 0;
   const qHatFxMxSamples = [];
   const qHatPitchScaledSamples = [];
+
+  const helixConvention = {
+    handednessSign: HELIX_CONVENTION?.handednessSign ?? 1.0,
+    strandPhaseA: HELIX_CONVENTION?.strandPhaseA ?? (0.5 * Math.PI),
+    strandPhaseB: HELIX_CONVENTION?.strandPhaseB ?? (1.5 * Math.PI),
+    phaseGapSign: HELIX_CONVENTION?.phaseGapSign ?? 1.0,
+    angleUnitRadians: HELIX_CONVENTION?.angleUnitRadians ?? 1.0
+  };
 
   const extActive = [];
   if (extPixels && extPixels.length >= 4) {
@@ -195,6 +215,33 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     if (d2 < d3 && d3 < db + 1e-3) rungPass++;
 
     if (k > 0) {
+      const km = Math.max(0, k - 1);
+      const kp = Math.min(NODE_COUNT - 1, k + 1);
+      const pm = vec3At(posPixels, km);
+      const pp = vec3At(posPixels, kp);
+      const tRaw = [pp[0] - pm[0], pp[1] - pm[1], pp[2] - pm[2]];
+      const tLen = Math.hypot(tRaw[0], tRaw[1], tRaw[2]);
+      const aVecRaw = [a[0] - hub[0], a[1] - hub[1], a[2] - hub[2]];
+      const bVecRaw = [b[0] - hub[0], b[1] - hub[1], b[2] - hub[2]];
+      const aLen = Math.hypot(aVecRaw[0], aVecRaw[1], aVecRaw[2]);
+      const bLen = Math.hypot(bVecRaw[0], bVecRaw[1], bVecRaw[2]);
+      if (tLen > 1e-6 && aLen > 1e-6 && bLen > 1e-6) {
+        const axis = [tRaw[0] / tLen, tRaw[1] / tLen, tRaw[2] / tLen];
+        const aVec = [aVecRaw[0] / aLen, aVecRaw[1] / aLen, aVecRaw[2] / aLen];
+        const bVec = [bVecRaw[0] / bLen, bVecRaw[1] / bLen, bVecRaw[2] / bLen];
+
+        const observedPhase = wrapAnglePi(signedAngleAroundAxis(aVec, bVec, axis));
+        const expectedPhase = wrapAnglePi(
+          helixConvention.angleUnitRadians * helixConvention.handednessSign * Q_PITCH * AXIAL_SHIFT +
+          (helixConvention.strandPhaseB - helixConvention.strandPhaseA) +
+          helixConvention.phaseGapSign * 0.35 * Math.PI * Math.max(0.0, Math.min(1.6, gGap))
+        );
+        conventionChecks += 1;
+        if (Math.abs(wrapAnglePi(observedPhase - expectedPhase)) <= 0.2) conventionPass += 1;
+      }
+    }
+
+    if (k > 0) {
       const prevPhi = chemPixels[(k - 1) * 4 + 1];
       const w = chemPixels[k * 4 + 3];
       const observed = wrapAnglePi(phi - prevPhi);
@@ -285,6 +332,13 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
     hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0, requiredRatio: topologyMinRatio },
     rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0, requiredRatio: topologyMinRatio },
+    helixConventionSanity: {
+      pass: conventionPass,
+      total: conventionChecks,
+      ratio: conventionChecks ? conventionPass / conventionChecks : 0,
+      requiredRatio: criteria?.helixConventionMinRatio ?? 0.9,
+      configured: helixConvention
+    },
     zipBoundBehavior: { pass: zipBoundPass ? 1 : 0, total: 1, ratio: zipBoundPass ? 1 : 0, meanGap: round3(meanGap), zipMode: round3(zipMode) },
     eq34GeometryConsistency: {
       pass: eq34Pass ? 1 : 0,
@@ -342,7 +396,11 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     }
   };
 
-  const allPass = Object.values(metrics).every((m) => (m.total === 1 ? m.pass === 1 : m.ratio >= topologyMinRatio));
+  const allPass = Object.values(metrics).every((m) => {
+    if (m.total === 1) return m.pass === 1;
+    const requiredRatio = Number.isFinite(m.requiredRatio) ? m.requiredRatio : topologyMinRatio;
+    return m.ratio >= requiredRatio;
+  });
   return { allPass, metrics, activeNodes };
 }
 
@@ -388,6 +446,7 @@ export function createAcceptanceValidationRunner(config) {
       criteria: {
         topologyAndRoutingMinRatio: 0.9,
         topologyAndRoutingMinRatioUnzipped: 1.2e-1,
+        helixConventionMinRatio: 0.9,
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
         mdpiQBacksolveAbsErrMax: 3.5e-1,
