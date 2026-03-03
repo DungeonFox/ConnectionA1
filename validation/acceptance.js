@@ -214,7 +214,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const tanRelErr = Math.abs(tanAlphaGeom - tanRhs) / Math.max(Math.abs(tanRhs), 1e-6);
   const cotRelErr = Math.abs(cotAlphaGeom - cotRhs) / Math.max(Math.abs(cotRhs), 1e-6);
 
-  const eq34Threshold = 2e-2;
+  const eq34Threshold = criteria?.mdpiEq34RelErrMax ?? 2e-2;
   const eq34Pass = tanRelErr <= eq34Threshold && cotRelErr <= eq34Threshold;
 
   const uExpectedSigned = Q_PITCH * AXIAL_SHIFT;
@@ -223,7 +223,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const uErrNeg = Math.abs(U_S - uExpectedNeg);
   const uExpected = (uErrSigned <= uErrNeg) ? uExpectedSigned : uExpectedNeg;
   const uConvention = (uErrSigned <= uErrNeg) ? '+q*x_s' : '-q*x_s';
-  const eq1112Threshold = 5e-2;
+  const eq1112Threshold = criteria?.mdpiEq1112AbsErrMax ?? 5e-2;
   const eq1112Pass = Math.min(uErrSigned, uErrNeg) <= eq1112Threshold;
 
   const sortedQHatRaw = [...qHatFxMxSamples].sort((x, y) => x - y);
@@ -264,6 +264,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     qHatMinEstimatorErr <= qBacksolveThreshold && (qBacksolveDispersionPass || qBacksolveStabilityPass)
   );
 
+  const topologyMinRatio = criteria?.topologyAndRoutingMinRatio ?? 0.9;
+
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
     (scenarioName === 'unzip' || scenarioName === 'reroute') ? (meanGap >= 0.75) :
@@ -271,10 +273,10 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   );
 
   const metrics = {
-    helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0 },
-    pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0 },
-    hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0 },
-    rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0 },
+    helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
+    pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
+    hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0, requiredRatio: topologyMinRatio },
+    rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0, requiredRatio: topologyMinRatio },
     zipBoundBehavior: { pass: zipBoundPass ? 1 : 0, total: 1, ratio: zipBoundPass ? 1 : 0, meanGap: round3(meanGap), zipMode: round3(zipMode) },
     eq34GeometryConsistency: {
       pass: eq34Pass ? 1 : 0,
@@ -332,7 +334,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     }
   };
 
-  const allPass = Object.values(metrics).every((m) => m.ratio >= 0.9 || (m.total === 1 && m.pass === 1));
+  const allPass = Object.values(metrics).every((m) => (m.total === 1 ? m.pass === 1 : m.ratio >= topologyMinRatio));
   return { allPass, metrics, activeNodes };
 }
 
