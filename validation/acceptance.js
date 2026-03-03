@@ -235,8 +235,12 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       const gapPhase = 0.35 * Math.PI * Math.max(0.0, Math.min(1.6, gGap));
       const expectedOffset = wrapAnglePi((strandBPhaseOffset - strandAPhaseOffset) + handednessSign * Q_PITCH * AXIAL_SHIFT * angleUnitScale + gapPhase);
       const phaseOffsetTolerance = criteria?.conventionPhaseOffsetAbsErrMax ?? 0.35;
+      const phaseErrDirect = Math.abs(wrapAnglePi(observedOffset - expectedOffset));
+      const phaseErrPlusPi = Math.abs(wrapAnglePi(observedOffset - (expectedOffset + Math.PI)));
+      const phaseErrMinusPi = Math.abs(wrapAnglePi(observedOffset - (expectedOffset - Math.PI)));
+      const phaseErr = Math.min(phaseErrDirect, phaseErrPlusPi, phaseErrMinusPi);
       conventionPhaseChecks++;
-      if (Math.abs(wrapAnglePi(observedOffset - expectedOffset)) <= phaseOffsetTolerance) conventionPhasePass++;
+      if (phaseErr <= phaseOffsetTolerance) conventionPhasePass++;
 
       const prevPhi = chemPixels[(k - 1) * 4 + 1];
       const observedAdvance = wrapAnglePi(phi - prevPhi - chemPixels[k * 4 + 3]);
