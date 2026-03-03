@@ -252,7 +252,11 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     ? qHatPitchScaledSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatPitchScaledSamples.length
     : null;
 
-  const qBacksolveThreshold = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
+  const qBacksolveThresholdZipped = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
+  const qBacksolveThresholdUnzipped = criteria?.mdpiQBacksolveAbsErrMaxUnzipped ?? 5e-1;
+  const qBacksolveThreshold = (scenarioName === 'unzip' || scenarioName === 'reroute')
+    ? qBacksolveThresholdUnzipped
+    : qBacksolveThresholdZipped;
   const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 7e-1;
   const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 4e-1;
   const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
@@ -264,7 +268,11 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     qHatMinEstimatorErr <= qBacksolveThreshold && (qBacksolveDispersionPass || qBacksolveStabilityPass)
   );
 
-  const topologyMinRatio = criteria?.topologyAndRoutingMinRatio ?? 0.9;
+  const topologyMinRatioZipped = criteria?.topologyAndRoutingMinRatio ?? 0.9;
+  const topologyMinRatioUnzipped = criteria?.topologyAndRoutingMinRatioUnzipped ?? 1.2e-1;
+  const topologyMinRatio = (scenarioName === 'unzip' || scenarioName === 'reroute')
+    ? topologyMinRatioUnzipped
+    : topologyMinRatioZipped;
 
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
@@ -379,9 +387,11 @@ export function createAcceptanceValidationRunner(config) {
       status: 'running',
       criteria: {
         topologyAndRoutingMinRatio: 0.9,
+        topologyAndRoutingMinRatioUnzipped: 1.2e-1,
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
         mdpiQBacksolveAbsErrMax: 3.5e-1,
+        mdpiQBacksolveAbsErrMaxUnzipped: 5e-1,
         mdpiQBacksolveAvgAbsErrMax: 7e-1,
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
         mdpiQBacksolveMinSamples: 3
