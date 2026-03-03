@@ -69,7 +69,7 @@ function makeScenarioPlan(seedBase) {
   ];
 }
 
-function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled }) {
+function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled, alphaCalibration, accCalibration }) {
   const {
     NODE_COUNT,
     NECK_SEG,
@@ -96,6 +96,9 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const strandBPhaseOffset = Number.isFinite(convention.strandBPhaseOffset) ? convention.strandBPhaseOffset : 1.5 * Math.PI;
   const angleUnitScale = Number.isFinite(convention.angleUnitScale) ? convention.angleUnitScale : 1.0;
 
+  const alphaRef = Number.isFinite(alphaCalibration?.alpha0Applied)
+    ? alphaCalibration.alpha0Applied
+        : alphaCalibration?.alpha0Solved;
   let activeNodes = 0;
   let radiusChecks = 0;
   let radiusPass = 0;
@@ -110,6 +113,10 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   let conventionWindingChecks = 0;
   let conventionWindingPass = 0;
   let gapSum = 0;
+  let alphaBelowCount = 0;
+  let alphaAboveCount = 0;
+  let alphaBelowGapSum = 0;
+  let alphaAboveGapSum = 0;
   const qHatFxMxSamples = [];
   const qHatPitchScaledSamples = [];
 
@@ -129,9 +136,20 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     const g = chem[0];
     const phi = chem[1];
     const gGap = chem[2];
-
     if (g <= 0.05) continue;
     activeNodes++;
+
+    const tipIdx = idxSpineP0 + k * perSpine + (NECK_SEG - 1);
+    const tipAlphaHat = chemPixels[tipIdx * 4 + 1];
+    if (Number.isFinite(alphaRef) && Number.isFinite(tipAlphaHat)) {
+      if (tipAlphaHat < alphaCalibration.alpha0Solved) {
+        alphaBelowCount += 1;
+        alphaBelowGapSum += gGap;
+      } else {
+        alphaAboveCount += 1;
+        alphaAboveGapSum += gGap;
+      }
+    }
     gapSum += gGap;
 
     const p0 = vec3At(posPixels, k);
@@ -359,6 +377,38 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     (meanGap >= 0.0 && meanGap <= 1.25)
   );
 
+  const alphaBelowGapMean = alphaBelowCount > 0 ? alphaBelowGapSum / alphaBelowCount : null;
+  const alphaAboveGapMean = alphaAboveCount > 0 ? alphaAboveGapSum / alphaAboveCount : null;
+  const alphaGapCouplingMinSamples = criteria?.alpha0GapCouplingMinSamples ?? 6;
+  const alphaGapCouplingMinDelta = criteria?.alpha0GapCouplingMinDelta ?? 2e-2;
+  const alphaGapCouplingHasSignal = alphaBelowCount >= alphaGapCouplingMinSamples && alphaAboveCount >= alphaGapCouplingMinSamples;
+  const alphaGapDelta = (alphaBelowGapMean !== null && alphaAboveGapMean !== null)
+    ? (alphaBelowGapMean - alphaAboveGapMean)
+    : null;
+  const alphaGapCouplingPass = !emEnabled || !alphaGapCouplingHasSignal || (alphaGapDelta >= alphaGapCouplingMinDelta);
+
+  const alpha0ResidualAbs = Number.isFinite(alphaCalibration?.residualAtAlpha0)
+    ? Math.abs(alphaCalibration.residualAtAlpha0)
+    : Number.POSITIVE_INFINITY;
+  const alpha0ResidualThreshold = criteria?.alpha0ResidualAbsMax ?? 1e-2;
+  const alpha0MinSamples = criteria?.alpha0MinSamples ?? 8;
+  const alpha0Converged = !!alphaCalibration?.converged;
+  const alpha0HasSamples = (alphaCalibration?.samples ?? 0) >= alpha0MinSamples;
+  const alpha0HasSignal = alpha0HasSamples && Number.isFinite(alphaRef);
+  const alpha0Pass = !emEnabled || !alpha0HasSignal || (
+    alpha0Converged && alpha0ResidualAbs <= alpha0ResidualThreshold
+  );
+
+  const accelWiringAlphaErrMax = criteria?.alpha0AccelWiringAlphaErrMax ?? 1e-4;
+  const accelWiringMinCoupling = criteria?.alpha0AccelWiringMinCoupling ?? 1e-3;
+  const accAlpha0 = accCalibration?.alpha0;
+  const accCoupling = accCalibration?.alphaCoupling;
+  const accelWiringHasSignal = Number.isFinite(accAlpha0) && Number.isFinite(accCoupling) && Number.isFinite(alphaRef);
+  const accelWiringAlphaErr = accelWiringHasSignal ? Math.abs(accAlpha0 - alphaCalibration.alpha0Solved) : null;
+  const accelWiringPass = !emEnabled || !accelWiringHasSignal || (
+    accelWiringAlphaErr <= accelWiringAlphaErrMax && accCoupling >= accelWiringMinCoupling
+  );
+
   const metrics = {
     helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
     pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
@@ -435,6 +485,61 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       hasSignal: qBacksolveHasSignal,
       skipped: !emEnabled || !qBacksolveHasSignal,
       source: 'nearest-ext force proxy; raw -Fx/Mx variants mapped to qPitch via 1/(|ratio|*R^2)'
+    },
+    alpha0RadialEquilibrium: {
+      pass: alpha0Pass ? 1 : 0,
+      total: 1,
+      ratio: alpha0Pass ? 1 : 0,
+      thresholdResidualAbsMax: alpha0ResidualThreshold,
+      thresholdMinSamples: alpha0MinSamples,
+      converged: alpha0Converged,
+      alpha0Solved: alphaCalibration?.alpha0Solved ?? null,
+      alpha0Applied: alphaRef ?? null,
+      residualFrAbs: Number.isFinite(alpha0ResidualAbs) ? alpha0ResidualAbs : null,
+      residualFrSigned: alphaCalibration?.residualAtAlpha0 ?? null,
+      samples: alphaCalibration?.samples ?? 0,
+      iterations: alphaCalibration?.iterations ?? 0,
+      candidateCount: alphaCalibration?.candidateCount ?? 0,
+      hasEnoughSamples: alpha0HasSamples,
+      hasSignal: alpha0HasSignal,
+      skipped: !emEnabled || !alpha0HasSignal,
+      alphaRange: {
+        min: alphaCalibration?.minAlpha ?? null,
+        max: alphaCalibration?.maxAlpha ?? null
+      },
+      source: 'runtime alpha scan solver using force-direction projection and radial frame proxy F_r(alpha)=0'
+    },
+    alpha0GapCoupling: {
+      pass: alphaGapCouplingPass ? 1 : 0,
+      total: 1,
+      ratio: alphaGapCouplingPass ? 1 : 0,
+      thresholdMinSamples: alphaGapCouplingMinSamples,
+      thresholdGapDeltaMin: alphaGapCouplingMinDelta,
+      alpha0Solved: alphaRef ?? null,
+      belowCount: alphaBelowCount,
+      aboveCount: alphaAboveCount,
+      belowGapMean: alphaBelowGapMean,
+      aboveGapMean: alphaAboveGapMean,
+      gapDelta: alphaGapDelta,
+      hasSignal: alphaGapCouplingHasSignal,
+      emEnabled,
+      skipped: !emEnabled || !alphaGapCouplingHasSignal,
+      source: 'checks physical influence: nodes with alphaHat<alpha0 should exhibit larger mean gap'
+    },
+    alpha0AccelerationWiring: {
+      pass: accelWiringPass ? 1 : 0,
+      total: 1,
+      ratio: accelWiringPass ? 1 : 0,
+      thresholdAlphaErrAbsMax: accelWiringAlphaErrMax,
+      thresholdCouplingMin: accelWiringMinCoupling,
+      alpha0Solved: alphaRef ?? null,
+      accAlpha0,
+      accCoupling,
+      accAlphaErrAbs: accelWiringAlphaErr,
+      hasSignal: accelWiringHasSignal,
+      emEnabled,
+      skipped: !emEnabled || !accelWiringHasSignal,
+      source: 'verifies runtime solved alpha0 is wired into acceleration shader uniforms with active coupling'
     }
   };
 
@@ -465,6 +570,8 @@ export function createAcceptanceValidationRunner(config) {
     setEMRadius,
     setEMTwist,
     getZipMode,
+    getAlphaCalibration,
+    getAccCalibration,
     texSize
   } = config;
 
@@ -493,7 +600,13 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveMinSamples: 10,
         conventionPhaseOffsetAbsErrMax: 3.5e-1,
         conventionMinSamples: 12,
-        conventionRequiredRatio: 6.5e-1
+        conventionRequiredRatio: 6.5e-1,
+        alpha0ResidualAbsMax: 1e-2,
+        alpha0MinSamples: 8,
+        alpha0GapCouplingMinSamples: 6,
+        alpha0GapCouplingMinDelta: 2e-2,
+        alpha0AccelWiringAlphaErrMax: 1e-4,
+        alpha0AccelWiringMinCoupling: 1e-3
       }
     }
   };
@@ -527,7 +640,9 @@ export function createAcceptanceValidationRunner(config) {
       criteria: results.summary.criteria,
       zipMode: getZipMode(),
       scenarioName: s.name,
-      emEnabled: !!s.emEnabled
+      emEnabled: !!s.emEnabled,
+      alphaCalibration: getAlphaCalibration ? getAlphaCalibration() : null,
+      accCalibration: getAccCalibration ? getAccCalibration() : null
     });
 
     const record = {
@@ -575,11 +690,14 @@ export function createAcceptanceValidationRunner(config) {
 
     getHudSummary() {
       const current = scenarios[Math.min(scenarioIndex, scenarios.length - 1)];
+      const last = results.scenarios.length ? results.scenarios[results.scenarios.length - 1] : null;
+      const metricCount = last?.result?.metrics ? Object.keys(last.result.metrics).length : 0;
       return {
         status: results.summary.status,
         passed: results.summary.passed,
         failed: results.summary.failed,
         total: results.summary.total,
+        metricCount,
         currentScenario: finalized ? 'complete' : `${current.name} (${frameInScenario}/${current.frames})`
       };
     }

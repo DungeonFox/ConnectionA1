@@ -5,6 +5,55 @@
 import { hash12 } from './glslNoise.js';
 import { PI } from './glslUtils.js';
 
+const EPS = 1e-6;
+
+export function normalizeVec3(v) {
+  const len = Math.hypot(v[0], v[1], v[2]);
+  if (len <= EPS) return null;
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
+export function inferAlphaHatFromForceComponents(forceDir, tangent) {
+  const fDotT =
+    forceDir[0] * tangent[0] +
+    forceDir[1] * tangent[1] +
+    forceDir[2] * tangent[2];
+  const fParallel = Math.abs(fDotT);
+  const proj = [
+    tangent[0] * fDotT,
+    tangent[1] * fDotT,
+    tangent[2] * fDotT
+  ];
+  const perp = [
+    forceDir[0] - proj[0],
+    forceDir[1] - proj[1],
+    forceDir[2] - proj[2]
+  ];
+  const fPerp = Math.hypot(perp[0], perp[1], perp[2]);
+  return {
+    alphaHat: Math.atan2(fParallel, Math.max(fPerp, EPS)),
+    fParallel,
+    fPerp
+  };
+}
+
+export function inferQHatFromMomentComponents(forceDir, tangent, radial, R, qRef) {
+  const fParallel = Math.abs(
+    forceDir[0] * tangent[0] +
+    forceDir[1] * tangent[1] +
+    forceDir[2] * tangent[2]
+  );
+  const moment = [
+    radial[1] * forceDir[2] - radial[2] * forceDir[1],
+    radial[2] * forceDir[0] - radial[0] * forceDir[2],
+    radial[0] * forceDir[1] - radial[1] * forceDir[0]
+  ];
+  const momentT = moment[0] * tangent[0] + moment[1] * tangent[1] + moment[2] * tangent[2];
+  const qMag = Math.abs(momentT) / Math.max(fParallel * R * R, EPS);
+  const qSign = qRef >= 0.0 ? 1.0 : -1.0;
+  return qSign * qMag;
+}
+
 // ==================== ARCHITECTURE: SF_SpineDynamics ====================
 // Calcium compartment ODE with influx/pump/diffusion
 // Bell-shaped Ca-dependent growth/zip pressure
@@ -120,6 +169,13 @@ export function createChemShader() {
       float CaGrow = bell(Ca, 0.12, 0.30, 0.55, 0.85);
       float CaShrink = smoothstep(0.70, 0.95, Ca);
       return vec2(CaGrow, CaShrink);
+    }
+
+    float alphaUnzipPressureForNode(float kNode, float idxSpineP0, float perSpine, float neck){
+      float tipIdx = idxSpineP0 + kNode * perSpine + (neck - 1.0);
+      float alphaHatTip = readChem(tipIdx).y;
+      float alphaDeficit = max(alpha0 - alphaHatTip, 0.0);
+      return smoothstep(0.01, 0.35, alphaDeficit);
     }
 
     vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt){
@@ -267,9 +323,7 @@ export function createChemShader() {
         float gapClosed = 0.0;
         float gapOpen = 1.2;
         float baseGapTarget = mix(gapOpen, gapClosed, zipMode);
-        float gapTarget = mix(baseGapTarget, gapOpen, CaShrink);
-        c.z += dt * gate * (gapTarget - c.z) * 1.25;
-        c.z = clamp(c.z, 0.0, 1.6);
+        float emUnzipPressure = 0.0;
 
         // Extra twist increment from external torque
         float torque = 0.0;
@@ -291,8 +345,16 @@ export function createChemShader() {
 
           float alphaHatNode = inferAlphaHatFromForce(dir, t);
           float qHatNode = inferQHatFromMoment(dir, t, radial, max(helixR + c.z, 1e-3), qPitch);
+          float alphaDeficit = max(alpha0 - alphaHatNode, 0.0);
+          emUnzipPressure = smoothstep(0.01, 0.35, alphaDeficit);
           torque += 0.02 * (alphaHatNode - alphaExp) + 0.01 * (qHatNode - qPitch);
+          torque += 0.03 * emUnzipPressure;
         }
+
+        float gapTarget = mix(baseGapTarget, gapOpen, clamp(CaShrink + 0.6 * emUnzipPressure, 0.0, 1.0));
+        c.z += dt * gate * (gapTarget - c.z) * (1.25 + 0.35 * emUnzipPressure);
+        c.z = clamp(c.z, 0.0, 1.6);
+
         float wTarget = 0.15 * torque;
         c.w += dt * gate * (wTarget - c.w) * 0.9;
         c.w *= exp(-dt * 0.35);
@@ -314,7 +376,9 @@ export function createChemShader() {
         vec4 ck = readChem(kNode);
         float g = ck.x;
         float gGap = ck.z;
+        float alphaUnzipPressure = alphaUnzipPressureForNode(kNode, idxSpineP0, perSpine, neck);
         float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip *= (1.0 - 0.45 * alphaUnzipPressure);
         localZip = clamp(localZip, 0.0, 1.0);
 
         float prevG = readChem(max(kNode - 1.0, 0.0)).x;
@@ -539,6 +603,13 @@ export function createCoupledPosTargetShader() {
       return wellOrigin + offset;
     }
 
+    float alphaUnzipPressureForNode(float kNode, float idxSpineP0, float perSpine, float neck){
+      float tipIdx = idxSpineP0 + kNode * perSpine + (neck - 1.0);
+      float alphaHatTip = readChem(tipIdx).y;
+      float alphaDeficit = max(alpha0 - alphaHatTip, 0.0);
+      return smoothstep(0.01, 0.35, alphaDeficit);
+    }
+
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
     // Deterministic yellow highway from persisted route state
     vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
@@ -608,7 +679,9 @@ export function createCoupledPosTargetShader() {
         float gGap = ck.z;
 
         // ZS_Zippedness: Compute local zip from global mode and gap
+        float alphaUnzipPressure = alphaUnzipPressureForNode(k, idxSpineP0, perSpine, neck);
         float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip *= (1.0 - 0.45 * alphaUnzipPressure);
         localZip = clamp(localZip, 0.0, 1.0);
 
         // Get backbone frame
@@ -690,7 +763,9 @@ export function createCoupledPosTargetShader() {
         float gGap = ck.z;
         float phi = ck.y;
 
+        float alphaUnzipPressure = alphaUnzipPressureForNode(k, idxSpineP0, perSpine, neck);
         float localZip = zipMode * (1.0 - smoothstep(0.30, 1.20, gGap));
+        localZip *= (1.0 - 0.45 * alphaUnzipPressure);
         localZip = clamp(localZip, 0.0, 1.0);
 
         membership = step(0.05, g);

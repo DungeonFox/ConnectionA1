@@ -559,9 +559,19 @@ function createAccShader() {
         uniform float extTwist;         // 0 disables
         uniform float extTwistHz;       // cycles / second
 
+        // Alpha-calibrated coupling (runtime-solved alpha0 can directly modulate acceleration)
+        uniform float alpha0;
+        uniform float alphaCoupling;
+
         // NOTE: sampler2D pos, posTarget, vel are injected by GPUComputationRenderer via dependencies.
 
         float smooth01(float x) { return clamp(x, 0.0, 1.0); }
+
+        float inferAlphaHatFromForceDir(vec3 forceDir, vec3 tangent){
+            float fParallel = abs(dot(forceDir, tangent));
+            float fPerp = length(forceDir - dot(forceDir, tangent) * tangent);
+            return atan(fParallel, max(fPerp, 1e-6));
+        }
 
         // Deterministic-ish random vec2 per particle and sample index (no extra textures)
         vec2 rand2(float seed) {
@@ -687,6 +697,17 @@ function createAccShader() {
                     // Damping along tunnel direction using current velocity
                     float vn = dot(v, dir);
                     a += (-dir) * (vn * extC * shaped);
+
+                    // Alpha-calibrated acceleration coupling (direct particle-motion effect)
+                    vec3 tangent = normalize(v + back + vec3(1e-6, 0.0, 0.0));
+                    float alphaHat = inferAlphaHatFromForceDir(dir, tangent);
+                    float alphaDeficit = max(alpha0 - alphaHat, 0.0);
+                    float alphaPressure = smoothstep(0.01, 0.35, alphaDeficit);
+                    float alphaGain = max(alphaCoupling, 0.0) * alphaPressure * shaped;
+                    // Increase tunnel pull and add a mild transverse push to make the effect observable.
+                    a += (bestQ - p) * (0.45 * alphaGain);
+                    vec3 side = normalize(cross(tangent, dir) + vec3(1e-6, 0.0, 0.0));
+                    a += side * (0.20 * alphaGain);
 
                     // Optional swirl: a stable helical component around dir
                     if (extMode > 1.5 && extTwist > 0.00001) {
