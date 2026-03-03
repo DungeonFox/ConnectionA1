@@ -216,6 +216,7 @@ function solveAlpha0FromRadialEquilibrium() {
 
   sysA.chemVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
   sysA.posTargetVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
+  sysA.accVar.material.uniforms.alpha0.value = CALIBRATION_STATE.alpha0Solved;
 }
 
 function updateAlpha0Calibration() {
@@ -375,6 +376,8 @@ function makeSystemB() {
     extPower: { value: 2.0 },
     extTwist: { value: EM_STATE.twist },      // Helical EM component
     extTwistHz: { value: EM_STATE.twistHz }, // EM oscillation
+    alpha0: { value: ALPHA_0 },
+    alphaCoupling: { value: 0.0 },
   });
 
   Object.assign(velVar.material.uniforms, {
@@ -530,6 +533,8 @@ function makeSystemA(getExtTexture) {
     extPower: { value: 2.0 },
     extTwist: { value: EM_STATE.twist },
     extTwistHz: { value: EM_STATE.twistHz },
+    alpha0: { value: ALPHA_0 },
+    alphaCoupling: { value: 12.0 },
   });
 
   Object.assign(velVar.material.uniforms, {
@@ -804,6 +809,7 @@ function animate() {
       `  Radius: ${EM_STATE.radius.toFixed(1)} | K: ${EM_STATE.k} | Mode: ${emMode}`,
       `  Twist: ${EM_STATE.twist} | TwistHz: ${EM_STATE.twistHz}`,
       `  Physics: ${EM_STATE.enabled ? 'Radial REPULSION (α < α₀)' : 'No EM force'}`,
+      `  α-coupling(acc): ${sysA.accVar.material.uniforms.alphaCoupling.value.toFixed(2)}`,
       ``,
       `[SF_ZipSolver]`,
       `  zipMode=${zipMode.toFixed(3)} (target: ${targetZipMode.toFixed(1)})`,
