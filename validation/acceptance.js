@@ -327,6 +327,17 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   const topologyMinRatio = (scenarioName === 'unzip' || scenarioName === 'reroute')
     ? topologyMinRatioUnzipped
     : topologyMinRatioZipped;
+  const conventionRequiredRatio = criteria?.conventionRequiredRatio ?? 6.5e-1;
+  const conventionMinSamples = criteria?.conventionMinSamples ?? 8;
+  const hasConventionSignal = conventionPhaseChecks >= conventionMinSamples && conventionWindingChecks >= conventionMinSamples;
+  const conventionPhaseRatio = conventionPhaseChecks ? conventionPhasePass / conventionPhaseChecks : null;
+  const conventionWindingRatio = conventionWindingChecks ? conventionWindingPass / conventionWindingChecks : null;
+  const conventionRatio = hasConventionSignal
+    ? 0.5 * (conventionPhaseRatio + conventionWindingRatio)
+    : 1.0;
+  const conventionPass = !hasConventionSignal || (
+    conventionPhaseRatio >= conventionRequiredRatio && conventionWindingRatio >= conventionRequiredRatio
+  );
 
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
@@ -338,24 +349,21 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
     pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
     conventionSanity: {
-      pass: (conventionPhaseChecks >= (criteria?.conventionMinSamples ?? 8) && conventionWindingChecks >= (criteria?.conventionMinSamples ?? 8))
-        ? ((conventionPhasePass / conventionPhaseChecks) >= topologyMinRatio && (conventionWindingPass / conventionWindingChecks) >= topologyMinRatio ? 1 : 0)
-        : 1,
+      pass: conventionPass ? 1 : 0,
       total: 1,
-      ratio: (conventionPhaseChecks >= (criteria?.conventionMinSamples ?? 8) && conventionWindingChecks >= (criteria?.conventionMinSamples ?? 8))
-        ? (((conventionPhasePass / conventionPhaseChecks) + (conventionWindingPass / conventionWindingChecks)) * 0.5)
-        : 1,
-      requiredRatio: topologyMinRatio,
-      minSamples: criteria?.conventionMinSamples ?? 8,
+      ratio: conventionRatio,
+      requiredRatio: conventionRequiredRatio,
+      minSamples: conventionMinSamples,
       phaseChecks: conventionPhaseChecks,
-      phaseRatio: conventionPhaseChecks ? conventionPhasePass / conventionPhaseChecks : null,
+      phaseRatio: conventionPhaseRatio,
       windingChecks: conventionWindingChecks,
-      windingRatio: conventionWindingChecks ? conventionWindingPass / conventionWindingChecks : null,
+      windingRatio: conventionWindingRatio,
       handednessSign,
       strandAPhaseOffset,
       strandBPhaseOffset,
       angleUnitScale,
-      skipped: conventionPhaseChecks < (criteria?.conventionMinSamples ?? 8) || conventionWindingChecks < (criteria?.conventionMinSamples ?? 8)
+      hasSignal: hasConventionSignal,
+      skipped: !hasConventionSignal
     },
     hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0, requiredRatio: topologyMinRatio },
     rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0, requiredRatio: topologyMinRatio },
@@ -470,7 +478,8 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
         mdpiQBacksolveMinSamples: 3,
         conventionPhaseOffsetAbsErrMax: 3.5e-1,
-        conventionMinSamples: 8
+        conventionMinSamples: 8,
+        conventionRequiredRatio: 6.5e-1
       }
     }
   };
