@@ -44,6 +44,19 @@ const ALPHA_EXP = Math.atan(PITCH / (2.0 * Math.PI * HELIX_R));
 const U_S = 0.5 * COT_ALPHA;
 const ALPHA_0 = 38.0 * Math.PI / 180.0;
 
+const HELIX_CONVENTION = {
+  handednessSign: 1.0,
+  phaseOffsets: {
+    strandA: 0.5 * Math.PI,
+    strandB: 1.5 * Math.PI,
+    reference: -0.5 * Math.PI
+  },
+  angleUnits: {
+    name: 'radians',
+    toRadians: 1.0
+  }
+};
+
 // ==================== ARCHITECTURE: EM FIELD CONTROLS ====================
 // EM (Electromagnetic) field state
 const EM_STATE = {
@@ -321,7 +334,12 @@ function makeSystemA(getExtTexture) {
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
-    alpha0: { value: ALPHA_0 }
+    alpha0: { value: ALPHA_0 },
+    helixHandedness: { value: HELIX_CONVENTION.handednessSign },
+    strandAPhaseOffset: { value: HELIX_CONVENTION.phaseOffsets.strandA },
+    strandBPhaseOffset: { value: HELIX_CONVENTION.phaseOffsets.strandB },
+    phaseReferenceOffset: { value: HELIX_CONVENTION.phaseOffsets.reference },
+    angleToRadians: { value: HELIX_CONVENTION.angleUnits.toRadians }
   });
 
   // PosTarget uniforms
@@ -352,7 +370,12 @@ function makeSystemA(getExtTexture) {
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
-    alpha0: { value: ALPHA_0 }
+    alpha0: { value: ALPHA_0 },
+    helixHandedness: { value: HELIX_CONVENTION.handednessSign },
+    strandAPhaseOffset: { value: HELIX_CONVENTION.phaseOffsets.strandA },
+    strandBPhaseOffset: { value: HELIX_CONVENTION.phaseOffsets.strandB },
+    phaseReferenceOffset: { value: HELIX_CONVENTION.phaseOffsets.reference },
+    angleToRadians: { value: HELIX_CONVENTION.angleUnits.toRadians }
   });
 
   // ==================== EM FIELD IN ACC SHADER ====================
@@ -425,7 +448,8 @@ function makeSystemA(getExtTexture) {
       NODE_COUNT, NECK_SEG, HEAD_COUNT, 
       IDX_RUNG0, RUNG_COUNT, RENDER_COUNT,
       HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
-      COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0
+      COT_ALPHA, ALPHA_EXP, U_S, ALPHA_0,
+      HELIX_CONVENTION
     }
   };
 }
@@ -545,7 +569,8 @@ const validationRunner = createAcceptanceValidationRunner({
     TEX_SIZE, NODE_COUNT, NECK_SEG,
     HELIX_R, PITCH, AXIAL_SHIFT, Q_PITCH,
     COT_ALPHA, ALPHA_EXP, U_S,
-    DS, IDX_RUNG0
+    DS, IDX_RUNG0,
+    HELIX_CONVENTION
   },
   emState: EM_STATE,
   setTargetZipMode: (value) => { targetZipMode = value; },

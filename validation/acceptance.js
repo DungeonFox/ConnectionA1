@@ -28,6 +28,28 @@ function dist(a, b) {
   return Math.hypot(dx, dy, dz);
 }
 
+function sub(a, b) {
+  return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dot(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function cross(a, b) {
+  return [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0]
+  ];
+}
+
+function normalize(v) {
+  const len = Math.hypot(v[0], v[1], v[2]);
+  if (len <= 1e-8) return null;
+  return [v[0] / len, v[1] / len, v[2] / len];
+}
+
 function wrapAnglePi(a) {
   let v = a;
   while (v > Math.PI) v -= TWO_PI;
@@ -63,7 +85,8 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     ALPHA_EXP,
     U_S,
     DS,
-    IDX_RUNG0
+    IDX_RUNG0,
+    HELIX_CONVENTION
   } = constants;
 
   const perSpine = NECK_SEG;
@@ -80,9 +103,22 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   let hubPass = 0;
   let rungChecks = 0;
   let rungPass = 0;
+  let conventionWindingChecks = 0;
+  let conventionWindingPass = 0;
+  let conventionPhaseChecks = 0;
+  let conventionPhasePass = 0;
   let gapSum = 0;
   const qHatFxMxSamples = [];
   const qHatPitchScaledSamples = [];
+
+  const convention = HELIX_CONVENTION || {};
+  const conventionHandedness = Number.isFinite(convention.handednessSign) ? convention.handednessSign : 1.0;
+  const conventionAngleToRadians = Number.isFinite(convention?.angleUnits?.toRadians) ? convention.angleUnits.toRadians : 1.0;
+  const conventionStrandAOffset = Number.isFinite(convention?.phaseOffsets?.strandA) ? convention.phaseOffsets.strandA : 0.5 * Math.PI;
+  const conventionStrandBOffset = Number.isFinite(convention?.phaseOffsets?.strandB) ? convention.phaseOffsets.strandB : 1.5 * Math.PI;
+  const expectedABPhaseOffset = wrapAnglePi(
+    (conventionStrandBOffset - conventionStrandAOffset) + conventionHandedness * Q_PITCH * AXIAL_SHIFT * conventionAngleToRadians
+  );
 
   const extActive = [];
   if (extPixels && extPixels.length >= 4) {
@@ -202,6 +238,39 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       phaseChecks++;
       if (Math.abs(observed - expected) <= 0.12) phasePass++;
     }
+
+    const km = Math.max(0, k - 1);
+    const kp = Math.min(NODE_COUNT - 1, k + 1);
+    const pm = vec3At(posPixels, km);
+    const pp = vec3At(posPixels, kp);
+    const tangent = normalize(sub(pp, pm));
+
+    if (k > 0) {
+      const prevPhi = chemPixels[(k - 1) * 4 + 1];
+      const w = chemPixels[k * 4 + 3];
+      const observedHelixAdvance = wrapAnglePi(phi - prevPhi - w);
+      const expectedHelixAdvance = wrapAnglePi(conventionHandedness * Q_PITCH * DS * conventionAngleToRadians);
+      conventionWindingChecks++;
+      if (Math.abs(observedHelixAdvance - expectedHelixAdvance) <= (criteria?.conventionWindingAbsErrMax ?? 0.18)) {
+        conventionWindingPass++;
+      }
+    }
+
+    if (tangent) {
+      const radialA = sub(a, p0);
+      const radialB = sub(b, p0);
+      const radialAPlanar = sub(radialA, [tangent[0] * dot(radialA, tangent), tangent[1] * dot(radialA, tangent), tangent[2] * dot(radialA, tangent)]);
+      const radialBPlanar = sub(radialB, [tangent[0] * dot(radialB, tangent), tangent[1] * dot(radialB, tangent), tangent[2] * dot(radialB, tangent)]);
+      const raN = normalize(radialAPlanar);
+      const rbN = normalize(radialBPlanar);
+      if (raN && rbN) {
+        const observedABPhaseOffset = wrapAnglePi(Math.atan2(dot(cross(raN, rbN), tangent), dot(raN, rbN)));
+        conventionPhaseChecks++;
+        if (Math.abs(wrapAnglePi(observedABPhaseOffset - expectedABPhaseOffset)) <= (criteria?.conventionPhaseAbsErrMax ?? 0.4)) {
+          conventionPhasePass++;
+        }
+      }
+    }
   }
 
   const meanGap = activeNodes > 0 ? gapSum / activeNodes : 0;
@@ -312,6 +381,19 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
       uExpected,
       absError: Math.min(uErrSigned, uErrNeg)
     },
+    conventionSanity: {
+      pass: (conventionWindingChecks > 0 && conventionPhaseChecks > 0 &&
+        (conventionWindingPass / conventionWindingChecks) >= (criteria?.conventionMinRatio ?? topologyMinRatio) &&
+        (conventionPhasePass / conventionPhaseChecks) >= (criteria?.conventionMinRatio ?? topologyMinRatio)) ? 1 : 0,
+      total: 1,
+      ratio: (conventionWindingChecks > 0 && conventionPhaseChecks > 0 &&
+        (conventionWindingPass / conventionWindingChecks) >= (criteria?.conventionMinRatio ?? topologyMinRatio) &&
+        (conventionPhasePass / conventionPhaseChecks) >= (criteria?.conventionMinRatio ?? topologyMinRatio)) ? 1 : 0,
+      requiredRatio: criteria?.conventionMinRatio ?? topologyMinRatio,
+      winding: { pass: conventionWindingPass, total: conventionWindingChecks, ratio: conventionWindingChecks ? (conventionWindingPass / conventionWindingChecks) : 0, thresholdAbsErr: criteria?.conventionWindingAbsErrMax ?? 0.18 },
+      phaseOffset: { pass: conventionPhasePass, total: conventionPhaseChecks, ratio: conventionPhaseChecks ? (conventionPhasePass / conventionPhaseChecks) : 0, thresholdAbsErr: criteria?.conventionPhaseAbsErrMax ?? 0.4 },
+      expected: { handedness: conventionHandedness, phaseOffsetAB: expectedABPhaseOffset, angleToRadians: conventionAngleToRadians }
+    },
     qBacksolveConsistency: {
       pass: qBacksolvePass ? 1 : 0,
       total: 1,
@@ -394,7 +476,10 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveAbsErrMaxUnzipped: 5e-1,
         mdpiQBacksolveAvgAbsErrMax: 7e-1,
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
-        mdpiQBacksolveMinSamples: 3
+        mdpiQBacksolveMinSamples: 3,
+        conventionMinRatio: 0.9,
+        conventionWindingAbsErrMax: 0.18,
+        conventionPhaseAbsErrMax: 0.4
       }
     }
   };
