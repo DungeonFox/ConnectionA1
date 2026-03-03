@@ -51,7 +51,7 @@ function makeScenarioPlan(seedBase) {
   ];
 }
 
-function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMode, scenarioName, emEnabled }) {
+function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, criteria, zipMode, scenarioName, emEnabled }) {
   const {
     NODE_COUNT,
     NECK_SEG,
@@ -214,7 +214,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
   const tanRelErr = Math.abs(tanAlphaGeom - tanRhs) / Math.max(Math.abs(tanRhs), 1e-6);
   const cotRelErr = Math.abs(cotAlphaGeom - cotRhs) / Math.max(Math.abs(cotRhs), 1e-6);
 
-  const eq34Threshold = 2e-2;
+  const eq34Threshold = criteria?.mdpiEq34RelErrMax ?? 2e-2;
   const eq34Pass = tanRelErr <= eq34Threshold && cotRelErr <= eq34Threshold;
 
   const uExpectedSigned = Q_PITCH * AXIAL_SHIFT;
@@ -223,7 +223,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
   const uErrNeg = Math.abs(U_S - uExpectedNeg);
   const uExpected = (uErrSigned <= uErrNeg) ? uExpectedSigned : uExpectedNeg;
   const uConvention = (uErrSigned <= uErrNeg) ? '+q*x_s' : '-q*x_s';
-  const eq1112Threshold = 5e-2;
+  const eq1112Threshold = criteria?.mdpiEq1112AbsErrMax ?? 5e-2;
   const eq1112Pass = Math.min(uErrSigned, uErrNeg) <= eq1112Threshold;
 
   const sortedQHatRaw = [...qHatFxMxSamples].sort((x, y) => x - y);
@@ -250,11 +250,21 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
   const qHatMinEstimatorErr = Math.min(qHatMeanErr, qHatMedianErr, qHatTrimmedErr);
   const qHatAvgAbsErr = qHatPitchScaledSamples.length
     ? qHatPitchScaledSamples.reduce((acc, v) => acc + Math.abs(v - Q_PITCH), 0) / qHatPitchScaledSamples.length
-    : Number.POSITIVE_INFINITY;
+    : null;
 
-  const qBacksolveThreshold = 3.5e-1;
-  const qBacksolveHasSignal = qHatPitchScaledSamples.length >= 3;
-  const qBacksolvePass = !emEnabled || !qBacksolveHasSignal || qHatMinEstimatorErr <= qBacksolveThreshold;
+  const qBacksolveThreshold = criteria?.mdpiQBacksolveAbsErrMax ?? 3.5e-1;
+  const qBacksolveAvgAbsErrThreshold = criteria?.mdpiQBacksolveAvgAbsErrMax ?? 7e-1;
+  const qBacksolveSpreadThreshold = criteria?.mdpiQBacksolveEstimatorSpreadMax ?? 4e-1;
+  const qBacksolveMinSamples = criteria?.mdpiQBacksolveMinSamples ?? 3;
+  const qHatEstimatorSpread = Math.abs(qHatMean - qHatMedian);
+  const qBacksolveHasSignal = qHatPitchScaledSamples.length >= qBacksolveMinSamples;
+  const qBacksolveDispersionPass = qBacksolveHasSignal ? qHatAvgAbsErr <= qBacksolveAvgAbsErrThreshold : null;
+  const qBacksolveStabilityPass = qBacksolveHasSignal ? qHatEstimatorSpread <= qBacksolveSpreadThreshold : null;
+  const qBacksolvePass = !emEnabled || !qBacksolveHasSignal || (
+    qHatMinEstimatorErr <= qBacksolveThreshold && (qBacksolveDispersionPass || qBacksolveStabilityPass)
+  );
+
+  const topologyMinRatio = criteria?.topologyAndRoutingMinRatio ?? 0.9;
 
   const zipBoundPass = (
     (scenarioName === 'zip' || scenarioName === 'rezip') ? (meanGap <= 0.35) :
@@ -263,10 +273,10 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
   );
 
   const metrics = {
-    helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0 },
-    pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0 },
-    hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0 },
-    rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0 },
+    helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
+    pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
+    hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0, requiredRatio: topologyMinRatio },
+    rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0, requiredRatio: topologyMinRatio },
     zipBoundBehavior: { pass: zipBoundPass ? 1 : 0, total: 1, ratio: zipBoundPass ? 1 : 0, meanGap: round3(meanGap), zipMode: round3(zipMode) },
     eq34GeometryConsistency: {
       pass: eq34Pass ? 1 : 0,
@@ -299,16 +309,22 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
       total: 1,
       ratio: qBacksolvePass ? 1 : 0,
       thresholdAbsErr: qBacksolveThreshold,
+      thresholdAvgAbsErr: qBacksolveAvgAbsErrThreshold,
+      thresholdEstimatorSpreadAbs: qBacksolveSpreadThreshold,
+      thresholdMinSamples: qBacksolveMinSamples,
       sampleCount: qHatPitchScaledSamples.length,
       qPitch: Q_PITCH,
       qHatMean,
       qHatMedian,
       qHatTrimmed,
+      qHatEstimatorSpread,
       qHatMeanErr,
       qHatMedianErr,
       qHatTrimmedErr,
       qHatMinEstimatorErr,
       qHatAvgAbsErr,
+      dispersionGatePass: qBacksolveDispersionPass,
+      stabilityGatePass: qBacksolveStabilityPass,
       qHatRawMean,
       qHatRawMedian,
       emEnabled,
@@ -318,7 +334,7 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, zipMo
     }
   };
 
-  const allPass = Object.values(metrics).every((m) => m.ratio >= 0.9 || (m.total === 1 && m.pass === 1));
+  const allPass = Object.values(metrics).every((m) => (m.total === 1 ? m.pass === 1 : m.ratio >= topologyMinRatio));
   return { allPass, metrics, activeNodes };
 }
 
@@ -366,6 +382,8 @@ export function createAcceptanceValidationRunner(config) {
         mdpiEq34RelErrMax: 2e-2,
         mdpiEq1112AbsErrMax: 5e-2,
         mdpiQBacksolveAbsErrMax: 3.5e-1,
+        mdpiQBacksolveAvgAbsErrMax: 7e-1,
+        mdpiQBacksolveEstimatorSpreadMax: 4e-1,
         mdpiQBacksolveMinSamples: 3
       }
     }
@@ -397,6 +415,7 @@ export function createAcceptanceValidationRunner(config) {
       chemPixels,
       extPixels,
       constants,
+      criteria: results.summary.criteria,
       zipMode: getZipMode(),
       scenarioName: s.name,
       emEnabled: !!s.emEnabled
