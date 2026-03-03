@@ -105,8 +105,10 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
   let hubPass = 0;
   let rungChecks = 0;
   let rungPass = 0;
-  let conventionChecks = 0;
-  let conventionPass = 0;
+  let conventionPhaseChecks = 0;
+  let conventionPhasePass = 0;
+  let conventionWindingChecks = 0;
+  let conventionWindingPass = 0;
   let gapSum = 0;
   const qHatFxMxSamples = [];
   const qHatPitchScaledSamples = [];
@@ -228,15 +230,22 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     const t = normalize([pp[0] - pm[0], pp[1] - pm[1], pp[2] - pm[2]]);
     const rA = normalize([a[0] - hub[0], a[1] - hub[1], a[2] - hub[2]]);
     const rB = normalize([b[0] - hub[0], b[1] - hub[1], b[2] - hub[2]]);
-    if (t && rA && rB) {
+    if (k > 0 && t && rA && rB) {
       const observedOffset = Math.atan2(dot(t, cross(rA, rB)), dot(rA, rB));
       const gapPhase = 0.35 * Math.PI * Math.max(0.0, Math.min(1.6, gGap));
       const expectedOffset = wrapAnglePi((strandBPhaseOffset - strandAPhaseOffset) + handednessSign * Q_PITCH * AXIAL_SHIFT * angleUnitScale + gapPhase);
-      const observedWindingSign = Math.sign(dot(t, cross(rA, rB)));
-      const expectedWindingSign = Math.sign(Math.sin(expectedOffset));
-      conventionChecks += 2;
-      if (Math.abs(wrapAnglePi(observedOffset - expectedOffset)) <= 0.20) conventionPass++;
-      if (observedWindingSign === expectedWindingSign) conventionPass++;
+      const phaseOffsetTolerance = criteria?.conventionPhaseOffsetAbsErrMax ?? 0.35;
+      conventionPhaseChecks++;
+      if (Math.abs(wrapAnglePi(observedOffset - expectedOffset)) <= phaseOffsetTolerance) conventionPhasePass++;
+
+      const prevPhi = chemPixels[(k - 1) * 4 + 1];
+      const observedAdvance = wrapAnglePi(phi - prevPhi - chemPixels[k * 4 + 3]);
+      const expectedAdvanceSign = Math.sign(handednessSign * Q_PITCH * angleUnitScale);
+      const observedAdvanceSign = Math.sign(observedAdvance);
+      if (expectedAdvanceSign !== 0) {
+        conventionWindingChecks++;
+        if (observedAdvanceSign === expectedAdvanceSign) conventionWindingPass++;
+      }
     }
 
     if (k > 0) {
@@ -329,14 +338,24 @@ function evaluateInvariants({ posPixels, chemPixels, extPixels, constants, crite
     helixRadiusTolerance: { pass: radiusPass, total: radiusChecks, ratio: radiusChecks ? radiusPass / radiusChecks : 0, requiredRatio: topologyMinRatio },
     pitchPhaseConsistency: { pass: phasePass, total: phaseChecks, ratio: phaseChecks ? phasePass / phaseChecks : 0, requiredRatio: topologyMinRatio },
     conventionSanity: {
-      pass: conventionPass,
-      total: conventionChecks,
-      ratio: conventionChecks ? conventionPass / conventionChecks : 0,
+      pass: (conventionPhaseChecks >= (criteria?.conventionMinSamples ?? 8) && conventionWindingChecks >= (criteria?.conventionMinSamples ?? 8))
+        ? ((conventionPhasePass / conventionPhaseChecks) >= topologyMinRatio && (conventionWindingPass / conventionWindingChecks) >= topologyMinRatio ? 1 : 0)
+        : 1,
+      total: 1,
+      ratio: (conventionPhaseChecks >= (criteria?.conventionMinSamples ?? 8) && conventionWindingChecks >= (criteria?.conventionMinSamples ?? 8))
+        ? (((conventionPhasePass / conventionPhaseChecks) + (conventionWindingPass / conventionWindingChecks)) * 0.5)
+        : 1,
       requiredRatio: topologyMinRatio,
+      minSamples: criteria?.conventionMinSamples ?? 8,
+      phaseChecks: conventionPhaseChecks,
+      phaseRatio: conventionPhaseChecks ? conventionPhasePass / conventionPhaseChecks : null,
+      windingChecks: conventionWindingChecks,
+      windingRatio: conventionWindingChecks ? conventionWindingPass / conventionWindingChecks : null,
       handednessSign,
       strandAPhaseOffset,
       strandBPhaseOffset,
-      angleUnitScale
+      angleUnitScale,
+      skipped: conventionPhaseChecks < (criteria?.conventionMinSamples ?? 8) || conventionWindingChecks < (criteria?.conventionMinSamples ?? 8)
     },
     hubMidpointRelation: { pass: hubPass, total: hubChecks, ratio: hubChecks ? hubPass / hubChecks : 0, requiredRatio: topologyMinRatio },
     rungOrdering: { pass: rungPass, total: rungChecks, ratio: rungChecks ? rungPass / rungChecks : 0, requiredRatio: topologyMinRatio },
@@ -449,7 +468,9 @@ export function createAcceptanceValidationRunner(config) {
         mdpiQBacksolveAbsErrMaxUnzipped: 5e-1,
         mdpiQBacksolveAvgAbsErrMax: 7e-1,
         mdpiQBacksolveEstimatorSpreadMax: 4e-1,
-        mdpiQBacksolveMinSamples: 3
+        mdpiQBacksolveMinSamples: 3,
+        conventionPhaseOffsetAbsErrMax: 3.5e-1,
+        conventionMinSamples: 8
       }
     }
   };
