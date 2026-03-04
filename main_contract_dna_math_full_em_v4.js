@@ -87,6 +87,16 @@ const SEEK_POLICY_STATE = {
   seekMaxInfluence: 0.7
 };
 
+
+const MAX_SEEK_TARGETS = 8;
+const SEEK_TARGET_STATE = {
+  mode: 'off',
+  armed: false,
+  targetRadius: 20.0,
+  targetWeight: 1.0,
+  targets: []
+};
+
 let zipMode = 1.0;
 let targetZipMode = 1.0;
 
@@ -307,13 +317,23 @@ const seekPanel = document.getElementById('seek-panel');
 const seekModeSelect = document.getElementById('seek-mode');
 const seekModeReadout = document.getElementById('seek-mode-readout');
 const seekResetButton = document.getElementById('seek-reset');
+const seekTargetModeSelect = document.getElementById('seek-target-mode');
+const seekArmPickButton = document.getElementById('seek-arm-pick');
+const seekClearTargetsButton = document.getElementById('seek-clear-targets');
+const seekTargetReadout = document.getElementById('seek-target-readout');
+const seekTargetXInput = document.getElementById('seek-targetX');
+const seekTargetYInput = document.getElementById('seek-targetY');
+const seekTargetZInput = document.getElementById('seek-targetZ');
+const seekApplyXYZButton = document.getElementById('seek-apply-xyz');
 
 const seekControls = {
   seekStrength: document.getElementById('seek-seekStrength'),
   captureRadius: document.getElementById('seek-captureRadius'),
   torqueBias: document.getElementById('seek-torqueBias'),
   phaseLock: document.getElementById('seek-phaseLock'),
-  damping: document.getElementById('seek-damping')
+  damping: document.getElementById('seek-damping'),
+  targetRadius: document.getElementById('seek-targetRadius'),
+  targetWeight: document.getElementById('seek-targetWeight')
 };
 
 const seekValueLabels = {
@@ -321,18 +341,32 @@ const seekValueLabels = {
   captureRadius: document.getElementById('seek-val-captureRadius'),
   torqueBias: document.getElementById('seek-val-torqueBias'),
   phaseLock: document.getElementById('seek-val-phaseLock'),
-  damping: document.getElementById('seek-val-damping')
+  damping: document.getElementById('seek-val-damping'),
+  targetRadius: document.getElementById('seek-val-targetRadius'),
+  targetWeight: document.getElementById('seek-val-targetWeight')
 };
 
 function syncSeekPanelFromState() {
   if (seekModeSelect) seekModeSelect.value = SEEK_MODE_STATE.mode;
+  if (seekTargetModeSelect) seekTargetModeSelect.value = SEEK_TARGET_STATE.mode;
   for (const key of Object.keys(seekControls)) {
     const control = seekControls[key];
     if (!control) continue;
-    control.value = String(SEEK_MODE_STATE[key]);
-    if (seekValueLabels[key]) seekValueLabels[key].textContent = Number(SEEK_MODE_STATE[key]).toFixed(2);
+    const sourceState = (key === 'targetRadius' || key === 'targetWeight') ? SEEK_TARGET_STATE : SEEK_MODE_STATE;
+    control.value = String(sourceState[key]);
+    if (seekValueLabels[key]) seekValueLabels[key].textContent = Number(sourceState[key]).toFixed(2);
   }
   if (seekModeReadout) seekModeReadout.textContent = `mode: ${SEEK_MODE_STATE.mode}`;
+  if (seekTargetReadout) {
+    const armedText = SEEK_TARGET_STATE.armed ? ' | ARMED' : '';
+    seekTargetReadout.textContent = `targets: ${SEEK_TARGET_STATE.targets.length}${armedText}`;
+  }
+  if (SEEK_TARGET_STATE.targets.length > 0) {
+    const t0 = SEEK_TARGET_STATE.targets[SEEK_TARGET_STATE.targets.length - 1];
+    if (seekTargetXInput) seekTargetXInput.value = t0.x.toFixed(3);
+    if (seekTargetYInput) seekTargetYInput.value = t0.y.toFixed(3);
+    if (seekTargetZInput) seekTargetZInput.value = t0.z.toFixed(3);
+  }
 }
 
 function applySeekPreset(modeName) {
@@ -352,6 +386,113 @@ function deriveSeekPolicyUniforms() {
   SEEK_POLICY_STATE.seekWRadial = 0.15 + 0.75 * damping;
   SEEK_POLICY_STATE.seekWTorque = SEEK_MODE_STATE.torqueBias;
   SEEK_POLICY_STATE.seekMaxInfluence = Math.max(0.05, Math.min(2.0, 0.35 + 0.03 * SEEK_MODE_STATE.captureRadius));
+}
+
+
+function projectPointToScreen(point, cameraRef, canvas) {
+  const v = new THREE.Vector3(point[0], point[1], point[2]).project(cameraRef);
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (v.x * 0.5 + 0.5) * rect.width,
+    // Vertical-axis correction: use non-inverted NDC-y mapping to match pointer picking orientation.
+    y: (v.y * 0.5 + 0.5) * rect.height,
+    z: v.z
+  };
+}
+
+function addOrReplaceSeekTarget(target) {
+  const t = {
+    x: Number(target.x),
+    y: Number(target.y),
+    z: Number(target.z),
+    radius: Number(target.radius ?? SEEK_TARGET_STATE.targetRadius),
+    weight: Number(target.weight ?? SEEK_TARGET_STATE.targetWeight)
+  };
+
+  if (!Number.isFinite(t.x) || !Number.isFinite(t.y) || !Number.isFinite(t.z)) return false;
+
+  if (SEEK_TARGET_STATE.mode === 'off') SEEK_TARGET_STATE.mode = 'single';
+
+  if (SEEK_TARGET_STATE.mode === 'single') {
+    SEEK_TARGET_STATE.targets = [t];
+  } else {
+    SEEK_TARGET_STATE.targets.push(t);
+    if (SEEK_TARGET_STATE.targets.length > MAX_SEEK_TARGETS) SEEK_TARGET_STATE.targets.shift();
+  }
+
+  SEEK_TARGET_STATE.armed = false;
+  syncSeekPanelFromState();
+  updateSeekTargetUniforms();
+  return true;
+}
+
+function applyXYZTargetFromInputs() {
+  const x = Number(seekTargetXInput?.value);
+  const y = Number(seekTargetYInput?.value);
+  const z = Number(seekTargetZInput?.value);
+  const ok = addOrReplaceSeekTarget({ x, y, z });
+  if (!ok) console.warn('[SEEK TARGET] Invalid XYZ input; expected numeric x, y, z.');
+}
+
+function updateSeekTargetUniforms() {
+  if (!sysA?.accVar?.material?.uniforms) return;
+  const uniforms = sysA.accVar.material.uniforms;
+  const modeMap = { off: 0.0, single: 1.0, multi: 2.0 };
+  if (uniforms.seekTargetMode) uniforms.seekTargetMode.value = modeMap[SEEK_TARGET_STATE.mode] ?? 0.0;
+  if (uniforms.seekTargetCount) uniforms.seekTargetCount.value = Math.min(SEEK_TARGET_STATE.targets.length, MAX_SEEK_TARGETS);
+
+  if (uniforms.seekTargetPositions) {
+    for (let i = 0; i < MAX_SEEK_TARGETS; i++) {
+      const t = SEEK_TARGET_STATE.targets[i];
+      if (t) {
+        uniforms.seekTargetPositions.value[i].set(t.x, t.y, t.z, t.weight);
+        uniforms.seekTargetRadii.value[i] = t.radius;
+      } else {
+        uniforms.seekTargetPositions.value[i].set(0, 0, 0, 0);
+        uniforms.seekTargetRadii.value[i] = 0;
+      }
+    }
+    uniforms.seekTargetRadii.needsUpdate = true;
+  }
+}
+
+function pickSeekTargetFromClick(event) {
+  if (!SEEK_TARGET_STATE.armed || SEEK_TARGET_STATE.mode === 'off') return;
+  if (!sysB?.gpu?.getCurrentRenderTarget || !renderer?.domElement) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouseX = event.clientX - rect.left;
+  const mouseY = event.clientY - rect.top;
+
+  const extRT = sysB.gpu.getCurrentRenderTarget(sysB.posVar);
+  renderer.readRenderTargetPixels(extRT, 0, 0, TEX_SIZE, TEX_SIZE, extReadbackBuffer);
+
+  let best = null;
+  let bestD2 = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < COUNT; i++) {
+    const i4 = i * 4;
+    const tag = Math.floor(extReadbackBuffer[i4 + 3] + 1e-4);
+    if (tag < 1) continue;
+    const p = [extReadbackBuffer[i4], extReadbackBuffer[i4 + 1], extReadbackBuffer[i4 + 2]];
+    const screen = projectPointToScreen(p, camera, renderer.domElement);
+    if (screen.z < -1 || screen.z > 1) continue;
+    const dx = screen.x - mouseX;
+    const dy = screen.y - mouseY;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = p;
+    }
+  }
+
+  if (!best) return;
+  addOrReplaceSeekTarget({
+    x: best[0],
+    y: best[1],
+    z: best[2],
+    radius: SEEK_TARGET_STATE.targetRadius,
+    weight: SEEK_TARGET_STATE.targetWeight
+  });
 }
 
 function applySeekStateToUniforms() {
@@ -387,6 +528,7 @@ function applySeekStateToUniforms() {
       if (uniforms.seekWTorque) uniforms.seekWTorque.value = SEEK_POLICY_STATE.seekWTorque;
       if (uniforms.seekMaxInfluence) uniforms.seekMaxInfluence.value = SEEK_POLICY_STATE.seekMaxInfluence;
     }
+    updateSeekTargetUniforms();
   }
 }
 
@@ -402,10 +544,47 @@ function setupSeekPanelBindings() {
   for (const [key, control] of Object.entries(seekControls)) {
     if (!control) continue;
     control.addEventListener('input', () => {
-      SEEK_MODE_STATE.mode = 'manual';
-      SEEK_MODE_STATE[key] = Number(control.value);
+      if (key === 'targetRadius' || key === 'targetWeight') {
+        SEEK_TARGET_STATE[key] = Number(control.value);
+      } else {
+        SEEK_MODE_STATE.mode = 'manual';
+        SEEK_MODE_STATE[key] = Number(control.value);
+      }
       syncSeekPanelFromState();
     });
+  }
+
+  if (seekTargetModeSelect) {
+    seekTargetModeSelect.addEventListener('change', () => {
+      SEEK_TARGET_STATE.mode = seekTargetModeSelect.value;
+      if (SEEK_TARGET_STATE.mode === 'off') {
+        SEEK_TARGET_STATE.armed = false;
+        SEEK_TARGET_STATE.targets = [];
+      }
+      syncSeekPanelFromState();
+      updateSeekTargetUniforms();
+    });
+  }
+
+  if (seekArmPickButton) {
+    seekArmPickButton.addEventListener('click', () => {
+      if (SEEK_TARGET_STATE.mode === 'off') SEEK_TARGET_STATE.mode = 'single';
+      SEEK_TARGET_STATE.armed = !SEEK_TARGET_STATE.armed;
+      syncSeekPanelFromState();
+    });
+  }
+
+  if (seekClearTargetsButton) {
+    seekClearTargetsButton.addEventListener('click', () => {
+      SEEK_TARGET_STATE.targets = [];
+      SEEK_TARGET_STATE.armed = false;
+      syncSeekPanelFromState();
+      updateSeekTargetUniforms();
+    });
+  }
+
+  if (seekApplyXYZButton) {
+    seekApplyXYZButton.addEventListener('click', applyXYZTargetFromInputs);
   }
 
   if (seekResetButton) {
@@ -422,6 +601,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setClearColor(0x000000, 1);
 document.body.appendChild(renderer.domElement);
+renderer.domElement.addEventListener('pointerdown', pickSeekTargetFromClick);
 
 const scene = new THREE.Scene();
 
@@ -691,6 +871,10 @@ function makeSystemA(getExtTexture) {
     extTwistHz: { value: EM_STATE.twistHz },
     alpha0: { value: ALPHA_0 },
     alphaCoupling: { value: 12.0 },
+    seekTargetMode: { value: 0.0 },
+    seekTargetCount: { value: 0.0 },
+    seekTargetPositions: { value: Array.from({ length: MAX_SEEK_TARGETS }, () => new THREE.Vector4()) },
+    seekTargetRadii: { value: new Float32Array(MAX_SEEK_TARGETS) },
   });
 
   Object.assign(velVar.material.uniforms, {
@@ -1029,6 +1213,10 @@ function animate() {
       `[SF_ZipSolver]`,
       `  zipMode=${zipMode.toFixed(3)} (target: ${targetZipMode.toFixed(1)})`,
       ``,
+      `[Seek Targets]`,
+      `  mode=${SEEK_TARGET_STATE.mode} count=${SEEK_TARGET_STATE.targets.length} armed=${SEEK_TARGET_STATE.armed ? 'yes' : 'no'}`,
+      `  radius=${SEEK_TARGET_STATE.targetRadius.toFixed(1)} weight=${SEEK_TARGET_STATE.targetWeight.toFixed(2)}`,
+      ``,
       `[SF_DebugValidate]`,
       `  Mode: ${debugStatus}`,
       ``,
@@ -1056,7 +1244,7 @@ function animate() {
 animate();
 
 window.DNASpineArchitecture = {
-  sysA, sysB, DEBUG_STATE, EM_STATE, SEEK_MODE_STATE, RESIDUAL_STATE, validationRunner,
+  sysA, sysB, DEBUG_STATE, EM_STATE, SEEK_MODE_STATE, SEEK_TARGET_STATE, RESIDUAL_STATE, validationRunner,
   getResidualMetrics: () => ({ ...RESIDUAL_STATE }),
   getAlphaCalibration: () => ({ ...CALIBRATION_STATE }),
   constants: {
