@@ -688,6 +688,41 @@ export function createCoupledPosTargetShader() {
 
     }
 
+    // Same route-state timing, but the middle leg follows the existing strand.
+    // This lets incoming same-type particles "draw" along their own helix path.
+    vec3 routeAlongStrand(float i, float kNode, vec3 dest, vec4 routeState, float strandBaseIdx){
+      float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
+      float s = clamp(routeState.y, 0.0, 1.0);
+
+      vec3 origin = getWellPosition(i);
+      float kPrev = max(kNode - 1.0, 0.0);
+      float kPrev2 = max(kNode - 2.0, 0.0);
+      vec3 prev = readPos(strandBaseIdx + kPrev).xyz;
+      vec3 prev2 = readPos(strandBaseIdx + kPrev2).xyz;
+
+      // Extrapolate from the current active strand direction to preserve helix curvature.
+      vec3 tangent = prev - prev2;
+      float tLen = length(tangent);
+      if (tLen > 1e-6) {
+        tangent /= tLen;
+      } else {
+        tangent = normalize(dest - prev + vec3(1e-6, 0.0, 0.0));
+      }
+      float arcLen = length(dest - prev);
+      vec3 strandAnchor = prev + tangent * (0.33 * arcLen);
+
+      if (seg < 0.5) return mix(origin, prev, s);
+      if (seg < 1.5) {
+        vec3 leg0 = mix(prev, strandAnchor, s);
+        vec3 leg1 = mix(strandAnchor, dest, s);
+        return mix(leg0, leg1, s);
+      }
+      if (seg < 2.5) return dest;
+      if (seg < 3.5) return mix(dest, strandAnchor, s);
+      if (seg < 4.5) return mix(strandAnchor, origin, s);
+      return origin;
+    }
+
     void main(){
       vec2 frag = floor(gl_FragCoord.xy);
       float i = frag.y * resolution.x + frag.x;
@@ -865,7 +900,7 @@ export function createCoupledPosTargetShader() {
         if (membership < 0.5){
           if (flowEnabled > 0.5){
             vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
+            outPos = routeAlongStrand(i, k, dest, routeState, idxStrandA0);
           } else {
             outPos = getWellPosition(i);
           }
@@ -906,7 +941,7 @@ export function createCoupledPosTargetShader() {
         if (membership < 0.5){
           if (flowEnabled > 0.5){
             vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
+            outPos = routeAlongStrand(i, k, dest, routeState, idxStrandB0);
           } else {
             outPos = getWellPosition(i);
           }
