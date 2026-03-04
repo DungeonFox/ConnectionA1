@@ -394,8 +394,8 @@ function projectPointToScreen(point, cameraRef, canvas) {
   const rect = canvas.getBoundingClientRect();
   return {
     x: (v.x * 0.5 + 0.5) * rect.width,
-    // Vertical-axis correction: use non-inverted NDC-y mapping to match pointer picking orientation.
-    y: (v.y * 0.5 + 0.5) * rect.height,
+    // Canvas Y grows downward; invert NDC Y so visual-up maps to positive world-up picks.
+    y: (-v.y * 0.5 + 0.5) * rect.height,
     z: v.z
   };
 }
