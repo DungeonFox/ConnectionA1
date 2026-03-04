@@ -660,30 +660,56 @@ export function createCoupledPosTargetShader() {
       return smoothstep(0.01, 0.35, alphaDeficit);
     }
 
+    float findActiveFront(){
+      float front = 0.0;
+      for (int j = 0; j < 2048; j++){
+        if (float(j) >= nodeCount) break;
+        float g = readChem(float(j)).x;
+        if (g > 0.05) {
+          front = float(j);
+        }
+      }
+      return front;
+    }
+
+    vec3 strandPosByRole(float role, float kNode, float idxStrandA0, float idxStrandB0){
+      float idx = (role < 1.5) ? (idxStrandA0 + kNode) : (idxStrandB0 + kNode);
+      return readPos(idx).xyz;
+    }
+
+    vec3 sampleStrandPolyline(float role, float frontNode, float u, float idxStrandA0, float idxStrandB0){
+      if (frontNode < 0.5){
+        return strandPosByRole(role, 0.0, idxStrandA0, idxStrandB0);
+      }
+
+      float t = clamp(u, 0.0, 1.0) * frontNode;
+      float k0 = floor(t);
+      float k1 = min(k0 + 1.0, frontNode);
+      float f = fract(t);
+
+      vec3 p0 = strandPosByRole(role, k0, idxStrandA0, idxStrandB0);
+      vec3 p1 = strandPosByRole(role, k1, idxStrandA0, idxStrandB0);
+      return mix(p0, p1, f);
+    }
+
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
     // Deterministic yellow highway from persisted route state
-    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
+    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState, float idxStrandA0, float idxStrandB0){
       float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
       float s = clamp(routeState.y, 0.0, 1.0);
+      float role = routeState.z;
 
       vec3 origin = getWellPosition(i);
-      vec3 base = readPos(kNode).xyz;
+      float front = min(findActiveFront(), kNode);
+      vec3 root = strandPosByRole(role, 0.0, idxStrandA0, idxStrandB0);
+      vec3 frontPos = strandPosByRole(role, front, idxStrandA0, idxStrandB0);
+      vec3 detour = mix(frontPos, origin, 0.7);
 
-      float Nn = nodeCount;
-      float neck = neckSeg;
-      float head = headCount;
-      float perSpine = neck + head;
-      float idxSpineP0 = Nn + 2.0 * Nn;
-      float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
-      vec3 hub = readPos(tipIdxP).xyz;
-
-      vec3 detour = mix(base, origin, 0.7);
-
-      if (seg < 0.5) return mix(origin, base, s);
-      if (seg < 1.5) return mix(base, hub, s);
-      if (seg < 2.5) return mix(hub, dest, s);
-      if (seg < 3.5) return hub;
-      if (seg < 4.5) return mix(hub, detour, s);
+      if (seg < 0.5) return mix(origin, root, s);
+      if (seg < 1.5) return sampleStrandPolyline(role, front, s, idxStrandA0, idxStrandB0);
+      if (seg < 2.5) return mix(frontPos, dest, s);
+      if (seg < 3.5) return frontPos;
+      if (seg < 4.5) return mix(frontPos, detour, s);
       return origin;
 
     }
@@ -865,7 +891,7 @@ export function createCoupledPosTargetShader() {
         if (membership < 0.5){
           if (flowEnabled > 0.5){
             vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
+            outPos = routeViaYellow(i, k, dest, routeState, idxStrandA0, idxStrandB0);
           } else {
             outPos = getWellPosition(i);
           }
@@ -906,7 +932,7 @@ export function createCoupledPosTargetShader() {
         if (membership < 0.5){
           if (flowEnabled > 0.5){
             vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
+            outPos = routeViaYellow(i, k, dest, routeState, idxStrandA0, idxStrandB0);
           } else {
             outPos = getWellPosition(i);
           }
