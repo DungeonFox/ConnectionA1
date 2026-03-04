@@ -183,15 +183,16 @@ export function createChemShader() {
       return smoothstep(0.01, 0.35, alphaDeficit);
     }
 
-    vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt){
-      // RS_Channels: x=segment, y=progress(s), z=role/tag, w=transition/event
-      float seg = clamp(floor(state.x + 0.5), 0.0, 5.0);
+    vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt, float kNode, float nodeCount){
+      // RS_Channels: x=path segment index (same-type strand node), y=progress(0..1), z=role/tag, w=transition/event
+      float pathSeg = max(state.x, 0.0);
       float s = clamp(state.y, 0.0, 1.0);
       float role = mix(2.0, 1.0, isStrandA);
       float eventTag = 0.0;
+      float maxSeg = max(kNode, 0.0);
 
       if (abs(state.z - role) > 0.25){
-        seg = 0.0;
+        pathSeg = 0.0;
         s = 0.0;
         eventTag = 8.0; // Role-tag mismatch initialization
       }
@@ -201,61 +202,58 @@ export function createChemShader() {
       float zipReset = 0.15;
 
       if (isActive > 0.5){
-        seg = 2.0;
+        pathSeg = maxSeg;
         s = 1.0;
         eventTag = 1.0; // Arrived/locked to destination
-        return vec4(seg, s, role, eventTag);
+        return vec4(pathSeg, s, role, eventTag);
       }
 
       if (flowOn < 0.5){
-        seg = 0.0;
+        pathSeg = 0.0;
         s = 0.0;
         eventTag = 5.0; // Flow disabled reset
-        return vec4(seg, s, role, eventTag);
+        return vec4(pathSeg, s, role, eventTag);
       }
 
       if (localZip < zipReset){
-        seg = 5.0;
+        pathSeg = 0.0;
         s = 0.0;
         eventTag = 4.0; // Hard reset due to low zip quality
-        return vec4(seg, s, role, eventTag);
+        return vec4(pathSeg, s, role, eventTag);
       }
 
       if (localZip < zipDetour){
-        seg = 4.0;
-        s = clamp(s + dt * 0.55, 0.0, 1.0);
+        s = clamp(s, 0.0, 0.98);
         eventTag = 3.0; // Detour mode
-        return vec4(seg, s, role, eventTag);
+        return vec4(pathSeg, s, role, eventTag);
       }
 
       if (localZip < zipPause){
-        seg = 3.0;
         s = min(s, 0.98);
         eventTag = 2.0; // Pause mode
-        return vec4(seg, s, role, eventTag);
+        return vec4(pathSeg, s, role, eventTag);
       }
 
-      float v = dt * (0.45 + 1.2 * queue01);
-      if (seg < 0.5){
+      // Pathwise travel: walk through all existing same-type strand nodes to visualize the strand.
+      float normalizedGoal = clamp((maxSeg + 1.0) / max(nodeCount, 1.0), 0.0, 1.0);
+      float v = dt * (0.45 + 1.2 * queue01) * (0.35 + 0.65 * normalizedGoal);
+
+      if (pathSeg < maxSeg){
         s += v;
         if (s >= 1.0){
-          seg = 1.0;
-          s -= 1.0;
+          float jump = floor(s);
+          pathSeg += jump;
+          s -= jump;
           eventTag = 6.0;
         }
-      } else if (seg < 1.5){
-        s += v;
-        if (s >= 1.0){
-          seg = 2.0;
-          s -= 1.0;
-          eventTag = 7.0;
-        }
       } else {
-        seg = 2.0;
+        pathSeg = maxSeg;
         s = clamp(s + v, 0.0, 1.0);
+        eventTag = 7.0;
       }
 
-      return vec4(seg, clamp(s, 0.0, 1.0), role, eventTag);
+      pathSeg = clamp(pathSeg, 0.0, maxSeg);
+      return vec4(pathSeg, clamp(s, 0.0, 1.0), role, eventTag);
     }
 
     void main(){
@@ -409,7 +407,7 @@ export function createChemShader() {
         float queue01 = smoothstep(0.25, 0.85, prevG);
         float isActive = step(0.05, g);
 
-        vec4 nextState = advanceRouteState(c, queue01, localZip, isStrandA, isActive, flowEnabled, dt);
+        vec4 nextState = advanceRouteState(c, queue01, localZip, isStrandA, isActive, flowEnabled, dt, kNode, N);
         gl_FragColor = nextState;
         return;
       }
@@ -661,13 +659,18 @@ export function createCoupledPosTargetShader() {
     }
 
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
-    // Deterministic yellow highway from persisted route state
+    // Persisted route follows existing same-type strand particles by index interpolation.
     vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
-      float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
+      float seg = max(routeState.x, 0.0);
       float s = clamp(routeState.y, 0.0, 1.0);
 
       vec3 origin = getWellPosition(i);
-      vec3 base = readPos(kNode).xyz;
+      float seg0 = floor(seg);
+      float seg1 = min(seg0 + 1.0, max(kNode, 0.0));
+
+      vec3 base0 = readPos(seg0).xyz;
+      vec3 base1 = readPos(seg1).xyz;
+      vec3 alongBackbone = mix(base0, base1, s);
 
       float Nn = nodeCount;
       float neck = neckSeg;
@@ -677,14 +680,21 @@ export function createCoupledPosTargetShader() {
       float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
       vec3 hub = readPos(tipIdxP).xyz;
 
-      vec3 detour = mix(base, origin, 0.7);
+      // Initial launch from well to first existing node, then travel node-to-node,
+      // then final handoff toward the destination position on the active growth front.
+      if (kNode < 0.5){
+        return mix(origin, dest, s);
+      }
 
-      if (seg < 0.5) return mix(origin, base, s);
-      if (seg < 1.5) return mix(base, hub, s);
-      if (seg < 2.5) return mix(hub, dest, s);
-      if (seg < 3.5) return hub;
-      if (seg < 4.5) return mix(hub, detour, s);
-      return origin;
+      if (seg < 0.5) return mix(origin, base0, s);
+
+      float arriveBand = 0.98;
+      if (seg < max(kNode - 0.5, 0.5)) return alongBackbone;
+      if (s < arriveBand) return alongBackbone;
+
+      float handoff = clamp((s - arriveBand) / (1.0 - arriveBand), 0.0, 1.0);
+      vec3 finalAnchor = mix(base1, hub, 0.5);
+      return mix(finalAnchor, dest, handoff);
 
     }
 
