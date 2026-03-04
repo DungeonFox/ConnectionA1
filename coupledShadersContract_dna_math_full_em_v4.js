@@ -688,6 +688,61 @@ export function createCoupledPosTargetShader() {
 
     }
 
+    bool nodeIsActive(float nodeIdx){
+      return readChem(nodeIdx).x > 0.05;
+    }
+
+    vec3 readTypePos(float typeId, float nodeIdx, float idxStrandA0, float idxStrandB0, float idxSpineP0){
+      if (typeId < 0.5) return readPos(nodeIdx).xyz;
+      if (typeId < 1.5) return readPos(idxStrandA0 + nodeIdx).xyz;
+      if (typeId < 2.5) return readPos(idxStrandB0 + nodeIdx).xyz;
+      return readPos(idxSpineP0 + nodeIdx * (neckSeg + headCount) + (neckSeg - 1.0)).xyz;
+    }
+
+    vec3 routeAlongTypeLattice(float i, float kNode, float typeId, vec3 fallbackDest, float idxStrandA0, float idxStrandB0, float idxSpineP0){
+      float Nn = nodeCount;
+      vec3 origin = getWellPosition(i);
+
+      float prevIdx = -1.0;
+      for (int step = 0; step < 256; step++) {
+        if (float(step) >= Nn) break;
+        float probe = kNode - float(step);
+        if (probe < 0.0) break;
+        if (nodeIsActive(probe)) {
+          prevIdx = probe;
+          break;
+        }
+      }
+
+      float nextIdx = -1.0;
+      for (int step = 0; step < 256; step++) {
+        if (float(step) >= Nn) break;
+        float probe = kNode + float(step);
+        if (probe >= Nn) break;
+        if (nodeIsActive(probe)) {
+          nextIdx = probe;
+          break;
+        }
+      }
+
+      vec3 pPrev = (prevIdx >= 0.0)
+        ? readTypePos(typeId, prevIdx, idxStrandA0, idxStrandB0, idxSpineP0)
+        : fallbackDest;
+      vec3 pNext = (nextIdx >= 0.0)
+        ? readTypePos(typeId, nextIdx, idxStrandA0, idxStrandB0, idxSpineP0)
+        : fallbackDest;
+
+      float span = max(abs(nextIdx - prevIdx), 1.0);
+      float localU = (prevIdx >= 0.0 && nextIdx >= 0.0)
+        ? clamp((kNode - prevIdx) / span, 0.0, 1.0)
+        : fract(hash12(vec2(i, 0.17)) + time * 0.11 * flowSpeed);
+
+      vec3 sparsePath = mix(pPrev, pNext, localU);
+      float travel = smoothstep(0.0, 1.0, fract(hash12(vec2(i, 0.37)) + time * 0.18 * flowSpeed));
+      return mix(origin, sparsePath, travel);
+    }
+
+
     void main(){
       vec2 frag = floor(gl_FragCoord.xy);
       float i = frag.y * resolution.x + frag.x;
@@ -792,6 +847,10 @@ export function createCoupledPosTargetShader() {
         }
 
         if (membership < 0.5){
+          if (flowEnabled > 0.5){
+            vec3 fallbackGreen = readPos(max(k - 1.0, 0.0)).xyz;
+            outPos = routeAlongTypeLattice(i, k, 0.0, fallbackGreen, idxStrandA0, idxStrandB0, idxSpineP0);
+          }
           gl_FragColor = vec4(outPos, membership + meta/256.0);
           return;
         }
@@ -864,8 +923,7 @@ export function createCoupledPosTargetShader() {
 
         if (membership < 0.5){
           if (flowEnabled > 0.5){
-            vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
+            outPos = routeAlongTypeLattice(i, k, 1.0, dest, idxStrandA0, idxStrandB0, idxSpineP0);
           } else {
             outPos = getWellPosition(i);
           }
@@ -905,8 +963,7 @@ export function createCoupledPosTargetShader() {
 
         if (membership < 0.5){
           if (flowEnabled > 0.5){
-            vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
+            outPos = routeAlongTypeLattice(i, k, 2.0, dest, idxStrandA0, idxStrandB0, idxSpineP0);
           } else {
             outPos = getWellPosition(i);
           }
@@ -934,6 +991,10 @@ export function createCoupledPosTargetShader() {
         meta = 3.0;
 
         if (membership < 0.5){
+          if (flowEnabled > 0.5){
+            vec3 fallbackHub = readPos(max(kNode - 1.0, 0.0)).xyz;
+            outPos = routeAlongTypeLattice(i, kNode, 3.0, fallbackHub, idxStrandA0, idxStrandB0, idxSpineP0);
+          }
           gl_FragColor = vec4(outPos, membership + meta/256.0);
           return;
         }

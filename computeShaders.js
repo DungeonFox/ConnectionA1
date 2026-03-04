@@ -563,6 +563,12 @@ function createAccShader() {
         uniform float alpha0;
         uniform float alphaCoupling;
 
+        // User-designated seek targets (world-space points provided by UI)
+        uniform float seekTargetMode;   // 0=off, 1=single, 2=multi
+        uniform float seekTargetCount;  // up to 8
+        uniform vec4 seekTargetPositions[8]; // xyz=target, w=weight
+        uniform float seekTargetRadii[8];
+
         // NOTE: sampler2D pos, posTarget, vel are injected by GPUComputationRenderer via dependencies.
 
         float smooth01(float x) { return clamp(x, 0.0, 1.0); }
@@ -571,6 +577,49 @@ function createAccShader() {
             float fParallel = abs(dot(forceDir, tangent));
             float fPerp = length(forceDir - dot(forceDir, tangent) * tangent);
             return atan(fParallel, max(fPerp, 1e-6));
+        }
+
+        vec3 userTargetForce(vec3 p){
+            if (seekTargetMode < 0.5 || seekTargetCount < 0.5) return vec3(0.0);
+
+            vec3 outF = vec3(0.0);
+            float maxTargets = min(seekTargetCount, 8.0);
+            float chosenD2 = 1e20;
+            vec3 chosen = vec3(0.0);
+            float chosenR = 1.0;
+            float chosenW = 0.0;
+
+            for (int i = 0; i < 8; i++) {
+                if (float(i) >= maxTargets) break;
+                vec3 tp = seekTargetPositions[i].xyz;
+                float tw = max(seekTargetPositions[i].w, 0.0);
+                float tr = max(seekTargetRadii[i], 1e-6);
+                vec3 d = tp - p;
+                float d2 = dot(d, d);
+
+                if (seekTargetMode < 1.5) {
+                    if (d2 < chosenD2) {
+                        chosenD2 = d2;
+                        chosen = d;
+                        chosenR = tr;
+                        chosenW = tw;
+                    }
+                } else {
+                    float dist = sqrt(max(d2, 1e-12));
+                    float s = 1.0 - (dist / tr);
+                    float shaped = smoothstep(0.0, 1.0, s);
+                    outF += normalize(d) * (tw * shaped);
+                }
+            }
+
+            if (seekTargetMode < 1.5 && chosenD2 < 1e19) {
+                float dist = sqrt(max(chosenD2, 1e-12));
+                float s = 1.0 - (dist / chosenR);
+                float shaped = smoothstep(0.0, 1.0, s);
+                outF += normalize(chosen) * (chosenW * shaped);
+            }
+
+            return outF;
         }
 
         // Deterministic-ish random vec2 per particle and sample index (no extra textures)
@@ -729,6 +778,12 @@ function createAccShader() {
                         a += helixDir * (extTwist * shaped);
                     }
                 }
+            }
+
+            // User-designated target attraction
+            vec3 targetF = userTargetForce(p);
+            if (length(targetF) > 1e-6) {
+                a += targetF * extK;
             }
 
             // NaN guard + clamp
