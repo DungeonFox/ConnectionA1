@@ -364,7 +364,7 @@ function syncSeekPanelFromState() {
   if (SEEK_TARGET_STATE.targets.length > 0) {
     const t0 = SEEK_TARGET_STATE.targets[SEEK_TARGET_STATE.targets.length - 1];
     if (seekTargetXInput) seekTargetXInput.value = t0.x.toFixed(3);
-    if (seekTargetYInput) seekTargetYInput.value = t0.y.toFixed(3);
+    if (seekTargetYInput) seekTargetYInput.value = (-t0.y).toFixed(3);
     if (seekTargetZInput) seekTargetZInput.value = t0.z.toFixed(3);
   }
 }
@@ -428,7 +428,7 @@ function addOrReplaceSeekTarget(target) {
 
 function applyXYZTargetFromInputs() {
   const x = Number(seekTargetXInput?.value);
-  const y = Number(seekTargetYInput?.value);
+  const y = -Number(seekTargetYInput?.value);
   const z = Number(seekTargetZInput?.value);
   const ok = addOrReplaceSeekTarget({ x, y, z });
   if (!ok) console.warn('[SEEK TARGET] Invalid XYZ input; expected numeric x, y, z.');
