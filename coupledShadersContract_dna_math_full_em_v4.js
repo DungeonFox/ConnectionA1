@@ -681,21 +681,13 @@ export function createCoupledPosTargetShader() {
       vec3 strandK = readPos(idxStrand0 + kNode).xyz;
       vec3 strandPath = sampleStrandRoute(idxStrand0, kNode, s);
 
-      float Nn = nodeCount;
-      float neck = neckSeg;
-      float head = headCount;
-      float perSpine = neck + head;
-      float idxSpineP0 = Nn + 2.0 * Nn;
-      float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
-      vec3 hub = readPos(tipIdxP).xyz;
-
       vec3 detour = mix(strandK, origin, 0.7);
 
       if (seg < 0.5) return mix(origin, strandHead, s);
       if (seg < 1.5) return strandPath;
       if (seg < 2.5) return mix(strandK, dest, s);
       if (seg < 3.5) return strandK;
-      if (seg < 4.5) return mix(hub, detour, s);
+      if (seg < 4.5) return mix(strandK, detour, s);
       return origin;
 
     }
