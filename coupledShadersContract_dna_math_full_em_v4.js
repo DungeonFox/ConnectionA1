@@ -200,13 +200,6 @@ export function createChemShader() {
       float zipDetour = 0.30;
       float zipReset = 0.15;
 
-      if (isActive > 0.5){
-        seg = 2.0;
-        s = 1.0;
-        eventTag = 1.0; // Arrived/locked to destination
-        return vec4(seg, s, role, eventTag);
-      }
-
       if (flowOn < 0.5){
         seg = 0.0;
         s = 0.0;
@@ -251,8 +244,13 @@ export function createChemShader() {
           eventTag = 7.0;
         }
       } else {
+        float arrivalS = 0.995;
+        float sPrev = s;
         seg = 2.0;
         s = clamp(s + v, 0.0, 1.0);
+        if (sPrev < arrivalS && s >= arrivalS){
+          eventTag = 1.0; // Arrived by proximity-to-destination threshold
+        }
       }
 
       return vec4(seg, clamp(s, 0.0, 1.0), role, eventTag);
@@ -862,18 +860,12 @@ export function createCoupledPosTargetShader() {
         vec3 baseA = p0 - 0.5 * t * axialShift;
         vec3 dest = baseA + R * (cos(phiA) * N + sin(phiA) * B);
 
-        if (membership < 0.5){
-          if (flowEnabled > 0.5){
-            vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
-          } else {
-            outPos = getWellPosition(i);
-          }
-          gl_FragColor = vec4(outPos, membership + meta/256.0);
-          return;
+        if (flowEnabled > 0.5){
+          vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
+          outPos = routeViaYellow(i, k, dest, routeState);
+        } else {
+          outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
-
-        outPos = dest;
         gl_FragColor = vec4(outPos, membership + meta/256.0);
         return;
       }
@@ -903,18 +895,12 @@ export function createCoupledPosTargetShader() {
         vec3 baseB = p0 + 0.5 * t * axialShift;
         vec3 dest = baseB + R * (cos(phiB) * N + sin(phiB) * B);
 
-        if (membership < 0.5){
-          if (flowEnabled > 0.5){
-            vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-            outPos = routeViaYellow(i, k, dest, routeState);
-          } else {
-            outPos = getWellPosition(i);
-          }
-          gl_FragColor = vec4(outPos, membership + meta/256.0);
-          return;
+        if (flowEnabled > 0.5){
+          vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
+          outPos = routeViaYellow(i, k, dest, routeState);
+        } else {
+          outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
-
-        outPos = dest;
         gl_FragColor = vec4(outPos, membership + meta/256.0);
         return;
       }
