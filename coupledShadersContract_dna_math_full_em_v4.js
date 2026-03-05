@@ -185,7 +185,7 @@ export function createChemShader() {
 
     vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt){
       // RS_Channels: x=segment, y=progress(s), z=role/tag, w=transition/event
-      float seg = clamp(floor(state.x + 0.5), 0.0, 5.0);
+      float seg = clamp(floor(state.x + 0.5), 0.0, 2.0);
       float s = clamp(state.y, 0.0, 1.0);
       float role = mix(2.0, 1.0, isStrandA);
       float eventTag = 0.0;
@@ -196,39 +196,16 @@ export function createChemShader() {
         eventTag = 8.0; // Role-tag mismatch initialization
       }
 
-      float zipPause = 0.45;
-      float zipDetour = 0.30;
-      float zipReset = 0.15;
-
-      if (flowOn < 0.5){
+      if (flowOn < 0.5 || isActive < 0.5){
         seg = 0.0;
         s = 0.0;
-        eventTag = 5.0; // Flow disabled reset
+        eventTag = 5.0; // Flow/inactive reset
         return vec4(seg, s, role, eventTag);
       }
 
-      if (localZip < zipReset){
-        seg = 5.0;
-        s = 0.0;
-        eventTag = 4.0; // Hard reset due to low zip quality
-        return vec4(seg, s, role, eventTag);
-      }
+      float zipFactor = smoothstep(0.05, 0.95, localZip);
+      float v = dt * (0.30 + 1.2 * queue01) * (0.15 + 0.85 * zipFactor);
 
-      if (localZip < zipDetour){
-        seg = 4.0;
-        s = clamp(s + dt * 0.55, 0.0, 1.0);
-        eventTag = 3.0; // Detour mode
-        return vec4(seg, s, role, eventTag);
-      }
-
-      if (localZip < zipPause){
-        seg = 3.0;
-        s = min(s, 0.98);
-        eventTag = 2.0; // Pause mode
-        return vec4(seg, s, role, eventTag);
-      }
-
-      float v = dt * (0.45 + 1.2 * queue01);
       if (seg < 0.5){
         s += v;
         if (s >= 1.0){
@@ -673,7 +650,7 @@ export function createCoupledPosTargetShader() {
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
     // Deterministic yellow highway from persisted route state
     vec3 routeViaYellow(float i, float kNode, float idxStrand0, vec3 dest, vec4 routeState){
-      float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
+      float seg = clamp(floor(routeState.x + 0.5), 0.0, 2.0);
       float s = clamp(routeState.y, 0.0, 1.0);
 
       vec3 origin = getWellPosition(i);
@@ -681,14 +658,9 @@ export function createCoupledPosTargetShader() {
       vec3 strandK = readPos(idxStrand0 + kNode).xyz;
       vec3 strandPath = sampleStrandRoute(idxStrand0, kNode, s);
 
-      vec3 detour = mix(strandK, origin, 0.7);
-
       if (seg < 0.5) return mix(origin, strandHead, s);
       if (seg < 1.5) return strandPath;
-      if (seg < 2.5) return mix(strandK, dest, s);
-      if (seg < 3.5) return strandK;
-      if (seg < 4.5) return mix(strandK, detour, s);
-      return origin;
+      return mix(strandK, dest, s);
 
     }
 
