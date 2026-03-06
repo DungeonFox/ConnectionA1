@@ -678,12 +678,13 @@ export function createCoupledPosTargetShader() {
       );
     }
 
-    vec3 sampleTrail(vec3 head, vec3 t1, vec3 t2, vec3 t3, float s){
-      float u = clamp(s, 0.0, 0.9999) * 2.0;
+    vec3 sampleTrail(vec3 h, vec3 t1, vec3 t2, vec3 t3, float s){
+      float u = clamp(s, 0.0, 0.9999) * 3.0;
       float seg = floor(u);
       float local = u - seg;
-      if (seg < 0.5) return catmullRom(head, head, t1, t2, local);
-      return catmullRom(head, t1, t2, t3, local);
+      if (seg < 0.5) return catmullRom(h, h, t1, t2, local);
+      if (seg < 1.5) return catmullRom(h, t1, t2, t3, local);
+      return catmullRom(t1, t2, t3, t3, local);
     }
 
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
@@ -705,34 +706,40 @@ export function createCoupledPosTargetShader() {
 
       vec3 detour = mix(base, origin, 0.7);
 
-      float goS = s;
-      vec3 activeHead = dest;
-      if (seg < 0.5){
-        activeHead = base;
-        goS = 0.25 + 0.35 * s;
-      } else if (seg < 1.5){
-        activeHead = hub;
-        goS = 0.35 + 0.35 * s;
-      } else if (seg < 2.5){
-        activeHead = dest;
-        goS = 0.55 + 0.45 * s;
-      } else if (seg < 3.5){
-        activeHead = hub;
-        goS = 0.62;
-      } else if (seg < 4.5){
-        activeHead = detour;
-        goS = 0.25 + 0.55 * s;
-      } else {
-        activeHead = origin;
-        goS = s;
-      }
-
       float strandLinear = kNode + (1.0 - isStrandA) * Nn;
       vec3 h = readTrailPoint(strandLinear, 0.0);
       vec3 t1 = readTrailPoint(strandLinear, 1.0);
       vec3 t2 = readTrailPoint(strandLinear, 2.0);
       vec3 t3 = readTrailPoint(strandLinear, 3.0);
-      return sampleTrail(activeHead, h, t1, t2, goS * 0.95 + 0.025 * smoothstep(0.0, 1.0, length(t3 - t2)));
+
+      float histValid = step(1e-6, dot(h, h) + dot(t1, t1) + dot(t2, t2));
+      float goS = s;
+
+      if (seg < 0.5){
+        goS = 0.10 + 0.25 * s;
+      } else if (seg < 1.5){
+        goS = 0.25 + 0.30 * s;
+      } else if (seg < 2.5){
+        goS = 0.55 + 0.45 * s;
+      } else if (seg < 3.5){
+        goS = 0.62;
+      } else if (seg < 4.5){
+        // Detour: continue sampling history but bias toward older trail section.
+        goS = 0.18 + 0.22 * (1.0 - s);
+      } else {
+        goS = 0.0;
+      }
+
+      vec3 sampled = sampleTrail(h, t1, t2, t3, goS);
+      vec3 fallbackLinear;
+      if (seg < 0.5) fallbackLinear = mix(origin, base, s);
+      else if (seg < 1.5) fallbackLinear = mix(base, hub, s);
+      else if (seg < 2.5) fallbackLinear = mix(hub, dest, s);
+      else if (seg < 3.5) fallbackLinear = hub;
+      else if (seg < 4.5) fallbackLinear = mix(hub, detour, s);
+      else fallbackLinear = origin;
+
+      return mix(fallbackLinear, sampled, histValid);
 
     }
 
