@@ -1,41 +1,27 @@
 export function applyMovementUniforms({ sysA, sysB, t, dt, frame, zipMode }) {
   sysA.chemVar.material.uniforms.time.value = t;
   sysA.chemVar.material.uniforms.dt.value = dt;
-  sysA.chemVar.material.uniforms.frame.value = frame;
   sysA.chemVar.material.uniforms.zipMode.value = zipMode;
   sysA.chemVar.material.uniforms.flowEnabled.value = sysA.posTargetVar.material.uniforms.flowEnabled.value;
 
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
-  sysA.posTargetVar.material.uniforms.frame.value = frame;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
 
   sysA.accVar.material.uniforms.time.value = t;
   sysA.accVar.material.uniforms.dt.value = dt;
-  sysA.accVar.material.uniforms.frame.value = frame;
 
   sysA.velVar.material.uniforms.time.value = t;
   sysA.velVar.material.uniforms.dt.value = dt;
-  sysA.velVar.material.uniforms.frame.value = frame;
 
   sysA.posVar.material.uniforms.time.value = t;
   sysA.posVar.material.uniforms.dt.value = dt;
   sysA.posVar.material.uniforms.frame.value = frame;
 
   sysB.posTargetVar.material.uniforms.time.value = t;
-  sysB.posTargetVar.material.uniforms.dt.value = dt;
-  sysB.posTargetVar.material.uniforms.frame.value = frame;
   sysB.accVar.material.uniforms.time.value = t;
-  sysB.accVar.material.uniforms.dt.value = dt;
-  sysB.accVar.material.uniforms.frame.value = frame;
-
   sysB.velVar.material.uniforms.time.value = t;
-  sysB.velVar.material.uniforms.dt.value = dt;
-  sysB.velVar.material.uniforms.frame.value = frame;
-
   sysB.posVar.material.uniforms.time.value = t;
-  sysB.posVar.material.uniforms.dt.value = dt;
-  sysB.posVar.material.uniforms.frame.value = frame;
 }
 
 export function stepMovementCompute({ sysA, sysB }) {
