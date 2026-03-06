@@ -1004,8 +1004,19 @@ export function createCoupledPosTargetShader() {
 
 export function createRouteTrailShader() {
   return /* glsl */`
+    ${PI}
+
     uniform float dt;
     uniform float nodeCount;
+    uniform float neckSeg;
+    uniform float headCount;
+    uniform float helixR;
+    uniform float qPitch;
+    uniform float axialShift;
+    uniform float helixHandednessSign;
+    uniform float strandAPhaseOffset;
+    uniform float strandBPhaseOffset;
+    uniform float angleUnitScale;
     uniform float routeTrailBase;
     uniform float trailSamples;
     uniform float trailSpacing;
@@ -1023,6 +1034,107 @@ export function createRouteTrailShader() {
 
     float routeTrailIndex(float strandLinear, float slot){
       return routeTrailBase + strandLinear * trailSamples + slot;
+    }
+
+    vec3 fallbackNormal(vec3 t){
+      vec3 axis = (abs(t.y) < 0.85) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 n = cross(axis, t);
+      if (dot(n, n) < 1e-8){
+        axis = vec3(0.0, 0.0, 1.0);
+        n = cross(axis, t);
+      }
+      return normalize(n + vec3(1e-8, 0.0, 0.0));
+    }
+
+    vec3 rotateAroundAxis(vec3 v, vec3 axis, float angle){
+      float c = cos(angle);
+      float s = sin(angle);
+      return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+    }
+
+    void makeFrame(vec3 t, out vec3 N, out vec3 B){
+      N = fallbackNormal(t);
+      B = normalize(cross(t, N));
+    }
+
+    void transportFrame(vec3 TPrev, vec3 NPrev, vec3 BPrev, vec3 T, out vec3 N, out vec3 B){
+      float c = clamp(dot(TPrev, T), -1.0, 1.0);
+      if (c > 0.9995){
+        N = NPrev;
+        B = BPrev;
+        return;
+      }
+      if (c < -0.9995){
+        vec3 axis = cross(TPrev, vec3(1.0, 0.0, 0.0));
+        if (dot(axis, axis) < 1e-8) axis = cross(TPrev, vec3(0.0, 1.0, 0.0));
+        if (dot(axis, axis) < 1e-8) axis = cross(TPrev, vec3(0.0, 0.0, 1.0));
+        axis = normalize(axis + vec3(1e-8, 0.0, 0.0));
+        N = -NPrev + 2.0 * axis * dot(axis, NPrev);
+        B = -BPrev + 2.0 * axis * dot(axis, BPrev);
+        return;
+      }
+      vec3 v = cross(TPrev, T);
+      float s = length(v);
+      if (s < 1e-8){
+        N = NPrev;
+        B = BPrev;
+        return;
+      }
+      vec3 axis = v / s;
+      float angle = atan(s, c);
+      N = rotateAroundAxis(NPrev, axis, angle);
+      B = rotateAroundAxis(BPrev, axis, angle);
+    }
+
+    void orthonormalize(inout vec3 N, inout vec3 B, vec3 T){
+      N = normalize(N - dot(N, T) * T);
+      B = normalize(cross(T, N));
+    }
+
+    void getTransportedFrame(float k, out vec3 T, out vec3 N, out vec3 B){
+      vec3 p0 = readPos(k).xyz;
+      vec3 pm = readPos(max(k - 1.0, 0.0)).xyz;
+      T = normalize(p0 - pm + vec3(0.0, 0.0, 1e-6));
+      if (k < 0.5){
+        T = vec3(0.0, 0.0, 1.0);
+        makeFrame(T, N, B);
+        orthonormalize(N, B, T);
+        return;
+      }
+
+      float kp = k - 1.0;
+      vec3 pPrev = readPos(kp).xyz;
+      vec3 pPrevM = readPos(max(kp - 1.0, 0.0)).xyz;
+      vec3 TPrev = normalize(pPrev - pPrevM + vec3(0.0, 0.0, 1e-6));
+      vec3 NPrev = fallbackNormal(TPrev);
+      vec3 BPrev = normalize(cross(TPrev, NPrev));
+
+      transportFrame(TPrev, NPrev, BPrev, T, N, B);
+      orthonormalize(N, B, T);
+    }
+
+    vec3 strandAnchor(float kNode, float isStrandA){
+      vec4 ck = readChem(kNode);
+      float gGap = ck.z;
+      float phi = ck.y;
+
+      vec3 p0 = readPos(kNode).xyz;
+      vec3 t, N, B;
+      getTransportedFrame(kNode, t, N, B);
+
+      float qP = helixHandednessSign * qPitch * angleUnitScale;
+      float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
+      float R = helixR + gGap;
+      float dThetaAxial = qP * axialShift;
+
+      float phiA = phi + strandAPhaseOffset - 0.5 * gapPhase;
+      float phiB = phi + strandBPhaseOffset + dThetaAxial + 0.5 * gapPhase;
+
+      vec3 baseA = p0 - 0.5 * t * axialShift;
+      vec3 baseB = p0 + 0.5 * t * axialShift;
+      vec3 destA = baseA + R * (cos(phiA) * N + sin(phiA) * B);
+      vec3 destB = baseB + R * (cos(phiB) * N + sin(phiB) * B);
+      return mix(destB, destA, isStrandA);
     }
 
     void main(){
@@ -1044,10 +1156,9 @@ export function createRouteTrailShader() {
 
       float isStrandA = step(strandLinear, nodeCount - 0.5);
       float kNode = strandLinear - (1.0 - isStrandA) * nodeCount;
-      float strandIdx = mix(2.0 * nodeCount + kNode, nodeCount + kNode, isStrandA);
 
-      vec3 head = readPos(strandIdx).xyz;
       float g = readChem(kNode).x;
+      vec3 head = strandAnchor(kNode, isStrandA);
       if (g < 0.05) head = vec3(0.0);
 
       if (slot < 0.5){
