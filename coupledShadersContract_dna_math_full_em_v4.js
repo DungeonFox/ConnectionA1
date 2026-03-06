@@ -659,8 +659,9 @@ export function createCoupledPosTargetShader() {
     }
 
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
-    // Deterministic yellow highway from persisted route state
-    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
+    // Deterministic strand-type highway from persisted route state.
+    // Particles travel along their own strand trail (A or B) before arriving at dest.
+    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState, float isStrandA){
       float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
       float s = clamp(routeState.y, 0.0, 1.0);
 
@@ -675,12 +676,19 @@ export function createCoupledPosTargetShader() {
       float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
       vec3 hub = readPos(tipIdxP).xyz;
 
+      float idxStrandA0 = Nn;
+      float idxStrandB0 = Nn + Nn;
+      float idxStrand0 = mix(idxStrandB0, idxStrandA0, isStrandA);
+      float kPrev = max(kNode - 1.0, 0.0);
+      vec3 trailPrev = readPos(idxStrand0 + kPrev).xyz;
+      vec3 trailCurr = readPos(idxStrand0 + kNode).xyz;
+
       vec3 detour = mix(base, origin, 0.7);
 
-      if (seg < 0.5) return mix(origin, base, s);
-      if (seg < 1.5) return mix(base, hub, s);
-      if (seg < 2.5) return mix(hub, dest, s);
-      if (seg < 3.5) return hub;
+      if (seg < 0.5) return mix(origin, trailPrev, s);
+      if (seg < 1.5) return mix(trailPrev, trailCurr, s);
+      if (seg < 2.5) return mix(trailCurr, dest, s);
+      if (seg < 3.5) return dest;
       if (seg < 4.5) return mix(hub, detour, s);
       return origin;
 
@@ -862,7 +870,7 @@ export function createCoupledPosTargetShader() {
 
         if (flowEnabled > 0.5){
           vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = routeViaYellow(i, k, dest, routeState, 1.0);
         } else {
           outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
@@ -897,7 +905,7 @@ export function createCoupledPosTargetShader() {
 
         if (flowEnabled > 0.5){
           vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = routeViaYellow(i, k, dest, routeState, 0.0);
         } else {
           outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
