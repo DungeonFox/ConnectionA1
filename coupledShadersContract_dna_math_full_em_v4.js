@@ -514,7 +514,6 @@ export function createCoupledPosTargetShader() {
     uniform float strandAPhaseOffset;
     uniform float strandBPhaseOffset;
     uniform float angleUnitScale;
-    uniform sampler2D routeTrail;
     uniform float routeTrailBase;
     uniform float trailSamples;
 
