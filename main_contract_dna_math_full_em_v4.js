@@ -11,6 +11,7 @@ import {
   inferAlphaHatFromForceComponents
 } from './coupledShadersContract_dna_math_full_em_v4.js';
 import { createAcceptanceValidationRunner } from './validation/acceptance.js';
+import { applyMovementUniforms, stepMovementCompute, bindMovementTextures } from './particleMovement.js';
 
 // ==================== ARCHITECTURE: SF_StateSchema ====================
 const TEX_SIZE = 64;
@@ -935,8 +936,7 @@ const sysA = makeSystemA(() => sysB.posVar.material.uniforms.pos.value);
 sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
 
 // Warm-up compute once before calibration so force/proxy uses initialized textures.
-sysB.gpu.compute();
-sysA.gpu.compute();
+stepMovementCompute({ sysA, sysB });
 solveAlpha0FromRadialEquilibrium();
 setupSeekPanelBindings();
 applySeekStateToUniforms();
@@ -1133,45 +1133,9 @@ function animate() {
 
   const t = now / 1000;
 
-  // Update all uniforms
-  sysA.chemVar.material.uniforms.time.value = t;
-  sysA.chemVar.material.uniforms.dt.value = dt;
-  sysA.chemVar.material.uniforms.zipMode.value = zipMode;
-  sysA.chemVar.material.uniforms.flowEnabled.value = sysA.posTargetVar.material.uniforms.flowEnabled.value;
-  
-  sysA.posTargetVar.material.uniforms.time.value = t;
-  sysA.posTargetVar.material.uniforms.dt.value = dt;
-  sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
-
-  sysA.accVar.material.uniforms.time.value = t;
-  sysA.accVar.material.uniforms.dt.value = dt;
-  sysA.velVar.material.uniforms.time.value = t;
-  sysA.velVar.material.uniforms.dt.value = dt;
-  sysA.posVar.material.uniforms.time.value = t;
-  sysA.posVar.material.uniforms.dt.value = dt;
-  sysA.posVar.material.uniforms.frame.value = frame;
-
-  // System B updates
-  sysB.posTargetVar.material.uniforms.time.value = t;
-  sysB.accVar.material.uniforms.time.value = t;
-  sysB.velVar.material.uniforms.time.value = t;
-  sysB.posVar.material.uniforms.time.value = t;
-
-  // Compute
-  sysB.gpu.compute();
-  sysA.gpu.compute();
-
-  // Bind textures
-  sysB.mat.uniforms.posTarget.value = sysB.gpu.getCurrentRenderTarget(sysB.posTargetVar).texture;
-  sysB.mat.uniforms.acc.value       = sysB.gpu.getCurrentRenderTarget(sysB.accVar).texture;
-  sysB.mat.uniforms.vel.value       = sysB.gpu.getCurrentRenderTarget(sysB.velVar).texture;
-  sysB.mat.uniforms.pos.value       = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
-
-  sysA.mat.uniforms.posTarget.value = sysA.gpu.getCurrentRenderTarget(sysA.posTargetVar).texture;
-  sysA.mat.uniforms.acc.value       = sysA.gpu.getCurrentRenderTarget(sysA.accVar).texture;
-  sysA.mat.uniforms.vel.value       = sysA.gpu.getCurrentRenderTarget(sysA.velVar).texture;
-  sysA.mat.uniforms.pos.value       = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
-  sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
+  applyMovementUniforms({ sysA, sysB, t, dt, frame, zipMode });
+  stepMovementCompute({ sysA, sysB });
+  bindMovementTextures({ sysA, sysB });
 
   updateAlpha0Calibration();
 
