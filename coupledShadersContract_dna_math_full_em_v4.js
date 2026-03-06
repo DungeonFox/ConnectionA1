@@ -463,6 +463,72 @@ export function createChemShader() {
   `;
 }
 
+export function createFlowStateShader() {
+  return /* glsl */`
+    ${hash12}
+
+    uniform float dt;
+    uniform float nodeCount;
+    uniform float neckSeg;
+    uniform float headCount;
+    uniform float secondEnabled;
+    uniform float flowEnabled;
+    uniform float flowScale;
+    uniform float baseSpeed;
+    uniform float speedJitter;
+
+    vec2 uvFromIndex(float idx){
+      float x = mod(idx, resolution.x);
+      float y = floor(idx / resolution.x);
+      return (vec2(x, y) + 0.5) / resolution.xy;
+    }
+
+    void main(){
+      vec2 uv = gl_FragCoord.xy / resolution.xy;
+      vec2 frag = floor(gl_FragCoord.xy);
+      float i = frag.y * resolution.x + frag.x;
+
+      float N = nodeCount;
+      float perSpine = neckSeg + headCount;
+      float idxStrandA0 = N;
+      float idxStrandB0 = N + N;
+      float idxSpineP0  = N + 2.0 * N;
+      float spinePCount = N * perSpine;
+      float idxSpineS0  = idxSpineP0 + spinePCount;
+      float spineSCount = N * perSpine * secondEnabled;
+      float activeEnd = idxSpineS0 + spineSCount;
+
+      vec4 st = texture2D(flowState, uv);
+
+      if (i >= activeEnd){
+        gl_FragColor = vec4(0.0);
+        return;
+      }
+
+      float isA = step(idxStrandA0, i) * step(i, idxStrandA0 + N - 0.5);
+      float isB = step(idxStrandB0, i) * step(i, idxStrandB0 + N - 0.5);
+      float laneId = isA * 1.0 + isB * 2.0;
+
+      float seed = i * 17.137;
+      float seededProgress = hash12(vec2(seed, 0.71));
+      float seededSpeed = max(0.0, baseSpeed + (hash12(vec2(seed, 3.91)) * 2.0 - 1.0) * speedJitter);
+
+      float initialized = step(0.5, st.w);
+      float progress = mix(seededProgress, st.x, initialized);
+      float speed = mix(seededSpeed, st.y, initialized);
+
+      if (laneId < 0.5){
+        progress = 0.0;
+        speed = 0.0;
+      } else {
+        progress = fract(progress + speed * dt * flowScale * step(0.5, flowEnabled));
+      }
+
+      gl_FragColor = vec4(progress, speed, laneId, 1.0);
+    }
+  `;
+}
+
 // ==================== ARCHITECTURE: SF_HelixGenerator + SF_FrameTransport ====================
 // MDPI-compliant helix generation with parallel transport frame
 
@@ -478,6 +544,7 @@ export function createCoupledPosTargetShader() {
     uniform float neckSeg;
     uniform float headCount;
     uniform float secondEnabled;
+    uniform sampler2D flowState;
 
     uniform float ds;
     uniform float helixR;
@@ -504,6 +571,7 @@ export function createCoupledPosTargetShader() {
     uniform float pulseFrequency;
     uniform float pulseSpeed;
     uniform float zipMode;
+    uniform float transportGain;
 
     // MDPI Parameters
     uniform float cotAlpha;
@@ -856,15 +924,21 @@ export function createCoupledPosTargetShader() {
         // MDPI: Strand A with gap phase
         float gapPhase = 0.35 * PI * clamp(gGap, 0.0, 1.6);
         float R = helixR + gGap;
-        float phiA = phi + strandAPhaseOffset - 0.5 * gapPhase;
+        vec4 flowState4 = texture2D(flowState, gl_FragCoord.xy / resolution.xy);
+        float pathProgress = clamp(flowState4.x, 0.0, 1.0);
+
+        float phiA = phi + strandAPhaseOffset - 0.5 * gapPhase + 2.0 * PI * pathProgress;
         vec3 baseA = p0 - 0.5 * t * axialShift;
-        vec3 dest = baseA + R * (cos(phiA) * N + sin(phiA) * B);
+        vec3 helixDest = baseA + R * (cos(phiA) * N + sin(phiA) * B);
+        vec4 flowRouteState = vec4(2.0, pathProgress, flowState4.z, 0.0);
+        vec3 routed = routeViaYellow(i, k, helixDest, flowRouteState);
+        float lockGain = clamp(transportGain, 0.0, 1.0);
+        vec3 dest = mix(routed, helixDest, lockGain);
 
         if (flowEnabled > 0.5){
-          vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = dest;
         } else {
-          outPos = (membership < 0.5) ? getWellPosition(i) : dest;
+          outPos = (membership < 0.5) ? getWellPosition(i) : helixDest;
         }
         gl_FragColor = vec4(outPos, membership + meta/256.0);
         return;
@@ -891,15 +965,21 @@ export function createCoupledPosTargetShader() {
         float R = helixR + gGap;
         float dThetaAxial = qP * axialShift;
 
-        float phiB = phi + strandBPhaseOffset + dThetaAxial + 0.5 * gapPhase;
+        vec4 flowState4 = texture2D(flowState, gl_FragCoord.xy / resolution.xy);
+        float pathProgress = clamp(flowState4.x, 0.0, 1.0);
+
+        float phiB = phi + strandBPhaseOffset + dThetaAxial + 0.5 * gapPhase + 2.0 * PI * pathProgress;
         vec3 baseB = p0 + 0.5 * t * axialShift;
-        vec3 dest = baseB + R * (cos(phiB) * N + sin(phiB) * B);
+        vec3 helixDest = baseB + R * (cos(phiB) * N + sin(phiB) * B);
+        vec4 flowRouteState = vec4(2.0, pathProgress, flowState4.z, 0.0);
+        vec3 routed = routeViaYellow(i, k, helixDest, flowRouteState);
+        float lockGain = clamp(transportGain, 0.0, 1.0);
+        vec3 dest = mix(routed, helixDest, lockGain);
 
         if (flowEnabled > 0.5){
-          vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = dest;
         } else {
-          outPos = (membership < 0.5) ? getWellPosition(i) : dest;
+          outPos = (membership < 0.5) ? getWellPosition(i) : helixDest;
         }
         gl_FragColor = vec4(outPos, membership + meta/256.0);
         return;

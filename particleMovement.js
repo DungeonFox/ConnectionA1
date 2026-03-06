@@ -4,6 +4,9 @@ export function applyMovementUniforms({ sysA, sysB, t, dt, frame, zipMode }) {
   sysA.chemVar.material.uniforms.zipMode.value = zipMode;
   sysA.chemVar.material.uniforms.flowEnabled.value = sysA.posTargetVar.material.uniforms.flowEnabled.value;
 
+  sysA.flowStateVar.material.uniforms.dt.value = dt;
+  sysA.flowStateVar.material.uniforms.flowEnabled.value = sysA.posTargetVar.material.uniforms.flowEnabled.value;
+
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
@@ -40,4 +43,6 @@ export function bindMovementTextures({ sysA, sysB }) {
   sysA.mat.uniforms.vel.value = sysA.gpu.getCurrentRenderTarget(sysA.velVar).texture;
   sysA.mat.uniforms.pos.value = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
   sysA.mat.uniforms.chem.value = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
+
+  sysA.posTargetVar.material.uniforms.flowState.value = sysA.gpu.getCurrentRenderTarget(sysA.flowStateVar).texture;
 }

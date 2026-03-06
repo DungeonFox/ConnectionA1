@@ -6,6 +6,7 @@ import { createPosTargetShader, createAccShader, createVelShader, createPosShade
 import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
+  createFlowStateShader,
   createCoupledPosTargetShader,
   normalizeVec3,
   inferAlphaHatFromForceComponents
@@ -100,6 +101,13 @@ const SEEK_TARGET_STATE = {
 
 let zipMode = 1.0;
 let targetZipMode = 1.0;
+
+const FLOW_TRANSPORT_STATE = {
+  baseSpeed: 0.22,
+  speedJitter: 0.12,
+  flowScale: 1.0,
+  transportGain: 0.35
+};
 
 const DEBUG_STATE = {
   mode: 0,
@@ -762,14 +770,30 @@ function makeSystemA(getExtTexture) {
     tex0.image.data[i + 3] = active + pal / 256.0;
   }
 
+  const flow0 = gpu.createTexture();
+  for (let i = 0; i < flow0.image.data.length; i += 4) {
+    const idx = (i / 4) | 0;
+    const active = idx < RENDER_COUNT;
+    const u = (idx + 0.5) / COUNT;
+    const progress = active ? (0.5 + 0.5 * Math.sin(12.9898 * u + 78.233)) % 1 : 0.0;
+    const speedNoise = 0.5 + 0.5 * Math.sin(93.9898 * u + 11.113);
+    const speed = active ? Math.max(0, FLOW_TRANSPORT_STATE.baseSpeed + (speedNoise * 2.0 - 1.0) * FLOW_TRANSPORT_STATE.speedJitter) : 0.0;
+    flow0.image.data[i + 0] = progress;
+    flow0.image.data[i + 1] = speed;
+    flow0.image.data[i + 2] = 0.0;
+    flow0.image.data[i + 3] = active ? 1.0 : 0.0;
+  }
+
   const chemVar      = gpu.addVariable('chem',      createChemShader(),             tex0);
+  const flowStateVar = gpu.addVariable('flowState', createFlowStateShader(),        flow0);
   const posTargetVar = gpu.addVariable('posTarget', createCoupledPosTargetShader(), tex0);
   const accVar       = gpu.addVariable('acc',       createAccShader(),              tex0);
   const velVar       = gpu.addVariable('vel',       createVelShader(),              tex0);
   const posVar       = gpu.addVariable('pos',       createPosShader(),              tex0);
 
   gpu.setVariableDependencies(chemVar,      [chemVar, posVar]);
-  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar]);
+  gpu.setVariableDependencies(flowStateVar, [flowStateVar]);
+  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar, flowStateVar]);
   gpu.setVariableDependencies(accVar,       [accVar, posTargetVar, posVar, velVar]);
   gpu.setVariableDependencies(velVar,       [velVar, accVar]);
   gpu.setVariableDependencies(posVar,       [posVar, posTargetVar, velVar]);
@@ -806,6 +830,19 @@ function makeSystemA(getExtTexture) {
     angleUnitScale: { value: HELIX_CONVENTION.angleUnitScale }
   });
 
+  // Flow-state uniforms
+  Object.assign(flowStateVar.material.uniforms, {
+    dt: { value: 0.016 },
+    nodeCount: { value: NODE_COUNT },
+    neckSeg: { value: NECK_SEG },
+    headCount: { value: HEAD_COUNT },
+    secondEnabled: { value: SECOND_ENABLED },
+    flowEnabled: { value: 1.0 },
+    flowScale: { value: FLOW_TRANSPORT_STATE.flowScale },
+    baseSpeed: { value: FLOW_TRANSPORT_STATE.baseSpeed },
+    speedJitter: { value: FLOW_TRANSPORT_STATE.speedJitter }
+  });
+
   // PosTarget uniforms
   Object.assign(posTargetVar.material.uniforms, {
     time: { value: 0 },
@@ -814,6 +851,7 @@ function makeSystemA(getExtTexture) {
     neckSeg: { value: NECK_SEG },
     headCount: { value: HEAD_COUNT },
     secondEnabled: { value: SECOND_ENABLED },
+    flowState: { value: null },
     ds: { value: DS },
     helixR: { value: HELIX_R },
     pitch: { value: PITCH },
@@ -836,6 +874,7 @@ function makeSystemA(getExtTexture) {
     pulseFrequency: { value: 6.0 },
     pulseSpeed: { value: 2.0 },
     zipMode: { value: zipMode },
+    transportGain: { value: FLOW_TRANSPORT_STATE.transportGain },
     cotAlpha: { value: COT_ALPHA },
     alphaExp: { value: ALPHA_EXP },
     u_s: { value: U_S },
@@ -912,6 +951,7 @@ function makeSystemA(getExtTexture) {
   return { 
     gpu, 
     chemVar, 
+    flowStateVar, 
     posTargetVar, 
     accVar, 
     velVar, 
@@ -1089,6 +1129,7 @@ function setEMTwist(twist) {
 
 function setFlowEnabled(enabled) {
   sysA.chemVar.material.uniforms.flowEnabled.value = enabled;
+  sysA.flowStateVar.material.uniforms.flowEnabled.value = enabled;
   sysA.posTargetVar.material.uniforms.flowEnabled.value = enabled;
 }
 
