@@ -514,6 +514,9 @@ export function createCoupledPosTargetShader() {
     uniform float strandAPhaseOffset;
     uniform float strandBPhaseOffset;
     uniform float angleUnitScale;
+    uniform sampler2D routeTrail;
+    uniform float routeTrailBase;
+    uniform float trailSamples;
 
     vec2 uvFromIndex(float idx){
       float x = mod(idx, resolution.x);
@@ -523,6 +526,13 @@ export function createCoupledPosTargetShader() {
 
     vec4 readPos(float idx){ return texture2D(pos, uvFromIndex(idx)); }
     vec4 readChem(float idx){ return texture2D(chem, uvFromIndex(idx)); }
+    vec4 readRouteTrail(float idx){ return texture2D(routeTrail, uvFromIndex(idx)); }
+    float routeTrailIndex(float strandLinear, float slot){
+      return routeTrailBase + strandLinear * trailSamples + slot;
+    }
+    vec3 readTrailPoint(float strandLinear, float slot){
+      return readRouteTrail(routeTrailIndex(strandLinear, slot)).xyz;
+    }
 
     vec4 nearestExt(vec3 p, float seed){
       float dMin = 1e9;
@@ -658,9 +668,28 @@ export function createCoupledPosTargetShader() {
       return smoothstep(0.01, 0.35, alphaDeficit);
     }
 
+    vec3 catmullRom(vec3 p0, vec3 p1, vec3 p2, vec3 p3, float t){
+      float t2 = t * t;
+      float t3 = t2 * t;
+      return 0.5 * (
+        (2.0 * p1) +
+        (-p0 + p2) * t +
+        (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
+        (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+      );
+    }
+
+    vec3 sampleTrail(vec3 head, vec3 t1, vec3 t2, vec3 t3, float s){
+      float u = clamp(s, 0.0, 0.9999) * 2.0;
+      float seg = floor(u);
+      float local = u - seg;
+      if (seg < 0.5) return catmullRom(head, head, t1, t2, local);
+      return catmullRom(head, t1, t2, t3, local);
+    }
+
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
-    // Deterministic yellow highway from persisted route state
-    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
+    // Trail-history transport sampling (head + trailing points)
+    vec3 routeViaYellow(float i, float kNode, float isStrandA, vec3 dest, vec4 routeState){
       float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
       float s = clamp(routeState.y, 0.0, 1.0);
 
@@ -677,12 +706,34 @@ export function createCoupledPosTargetShader() {
 
       vec3 detour = mix(base, origin, 0.7);
 
-      if (seg < 0.5) return mix(origin, base, s);
-      if (seg < 1.5) return mix(base, hub, s);
-      if (seg < 2.5) return mix(hub, dest, s);
-      if (seg < 3.5) return hub;
-      if (seg < 4.5) return mix(hub, detour, s);
-      return origin;
+      float goS = s;
+      vec3 activeHead = dest;
+      if (seg < 0.5){
+        activeHead = base;
+        goS = 0.25 + 0.35 * s;
+      } else if (seg < 1.5){
+        activeHead = hub;
+        goS = 0.35 + 0.35 * s;
+      } else if (seg < 2.5){
+        activeHead = dest;
+        goS = 0.55 + 0.45 * s;
+      } else if (seg < 3.5){
+        activeHead = hub;
+        goS = 0.62;
+      } else if (seg < 4.5){
+        activeHead = detour;
+        goS = 0.25 + 0.55 * s;
+      } else {
+        activeHead = origin;
+        goS = s;
+      }
+
+      float strandLinear = kNode + (1.0 - isStrandA) * Nn;
+      vec3 h = readTrailPoint(strandLinear, 0.0);
+      vec3 t1 = readTrailPoint(strandLinear, 1.0);
+      vec3 t2 = readTrailPoint(strandLinear, 2.0);
+      vec3 t3 = readTrailPoint(strandLinear, 3.0);
+      return sampleTrail(activeHead, h, t1, t2, goS * 0.95 + 0.025 * smoothstep(0.0, 1.0, length(t3 - t2)));
 
     }
 
@@ -862,7 +913,7 @@ export function createCoupledPosTargetShader() {
 
         if (flowEnabled > 0.5){
           vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = routeViaYellow(i, k, 1.0, dest, routeState);
         } else {
           outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
@@ -897,7 +948,7 @@ export function createCoupledPosTargetShader() {
 
         if (flowEnabled > 0.5){
           vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = routeViaYellow(i, k, 0.0, dest, routeState);
         } else {
           outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
@@ -948,6 +999,74 @@ export function createCoupledPosTargetShader() {
       }
 
       gl_FragColor = vec4(outPos, membership + meta/256.0);
+    }
+  `;
+}
+
+export function createRouteTrailShader() {
+  return /* glsl */`
+    uniform float dt;
+    uniform float nodeCount;
+    uniform float routeTrailBase;
+    uniform float trailSamples;
+    uniform float trailSpacing;
+    uniform float trailRelax;
+
+    vec2 uvFromIndex(float idx){
+      float x = mod(idx, resolution.x);
+      float y = floor(idx / resolution.x);
+      return (vec2(x, y) + 0.5) / resolution.xy;
+    }
+
+    vec4 readPos(float idx){ return texture2D(pos, uvFromIndex(idx)); }
+    vec4 readChem(float idx){ return texture2D(chem, uvFromIndex(idx)); }
+    vec4 readTrail(float idx){ return texture2D(routeTrail, uvFromIndex(idx)); }
+
+    float routeTrailIndex(float strandLinear, float slot){
+      return routeTrailBase + strandLinear * trailSamples + slot;
+    }
+
+    void main(){
+      vec2 frag = floor(gl_FragCoord.xy);
+      float i = frag.y * resolution.x + frag.x;
+
+      float strandCount = 2.0 * nodeCount;
+      float totalTrail = strandCount * trailSamples;
+
+      vec4 prev = texture2D(routeTrail, gl_FragCoord.xy / resolution.xy);
+      if (i < routeTrailBase || i >= routeTrailBase + totalTrail){
+        gl_FragColor = prev;
+        return;
+      }
+
+      float rel = i - routeTrailBase;
+      float strandLinear = floor(rel / trailSamples);
+      float slot = rel - strandLinear * trailSamples;
+
+      float isStrandA = step(strandLinear, nodeCount - 0.5);
+      float kNode = strandLinear - (1.0 - isStrandA) * nodeCount;
+      float strandIdx = mix(2.0 * nodeCount + kNode, nodeCount + kNode, isStrandA);
+
+      vec3 head = readPos(strandIdx).xyz;
+      float g = readChem(kNode).x;
+      if (g < 0.05) head = vec3(0.0);
+
+      if (slot < 0.5){
+        gl_FragColor = vec4(head, 1.0);
+        return;
+      }
+
+      vec3 pPrev = readTrail(routeTrailIndex(strandLinear, slot - 1.0)).xyz;
+      vec3 pCur = readTrail(routeTrailIndex(strandLinear, slot)).xyz;
+      vec3 delta = pPrev - pCur;
+      float len = length(delta);
+      vec3 dir = (len > 1e-6) ? (delta / len) : vec3(0.0, 0.0, 1.0);
+      vec3 desired = pPrev - dir * trailSpacing;
+      float relax = clamp(trailRelax * dt * 60.0, 0.0, 1.0);
+      vec3 outPos = mix(pCur, desired, relax);
+      if (dot(pCur, pCur) < 1e-8) outPos = desired;
+
+      gl_FragColor = vec4(outPos, 1.0);
     }
   `;
 }

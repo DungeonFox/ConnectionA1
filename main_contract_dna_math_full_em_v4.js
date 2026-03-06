@@ -7,6 +7,7 @@ import { createPointsMaterial } from './materials.js';
 import { 
   createChemShader, 
   createCoupledPosTargetShader,
+  createRouteTrailShader,
   normalizeVec3,
   inferAlphaHatFromForceComponents
 } from './coupledShadersContract_dna_math_full_em_v4.js';
@@ -31,6 +32,10 @@ const SEG_PER_CONN = 2;
 const CONN_PER_NODE = 2;
 const RUNG_COUNT = NODE_COUNT * CONN_PER_NODE * SEG_PER_CONN;
 const RENDER_COUNT = IDX_RUNG0 + RUNG_COUNT;
+
+const TRAIL_SAMPLES = 4;
+const ROUTE_TRAIL_BASE = RENDER_COUNT;
+
 
 // ==================== ARCHITECTURE: SF_HelixGenerator ====================
 // MDPI Helix Parameters
@@ -762,13 +767,15 @@ function makeSystemA(getExtTexture) {
   }
 
   const chemVar      = gpu.addVariable('chem',      createChemShader(),             tex0);
+  const routeTrailVar = gpu.addVariable('routeTrail', createRouteTrailShader(),      tex0);
   const posTargetVar = gpu.addVariable('posTarget', createCoupledPosTargetShader(), tex0);
   const accVar       = gpu.addVariable('acc',       createAccShader(),              tex0);
   const velVar       = gpu.addVariable('vel',       createVelShader(),              tex0);
   const posVar       = gpu.addVariable('pos',       createPosShader(),              tex0);
 
   gpu.setVariableDependencies(chemVar,      [chemVar, posVar]);
-  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar]);
+  gpu.setVariableDependencies(routeTrailVar, [routeTrailVar, posVar, chemVar]);
+  gpu.setVariableDependencies(posTargetVar, [posTargetVar, chemVar, posVar, routeTrailVar]);
   gpu.setVariableDependencies(accVar,       [accVar, posTargetVar, posVar, velVar]);
   gpu.setVariableDependencies(velVar,       [velVar, accVar]);
   gpu.setVariableDependencies(posVar,       [posVar, posTargetVar, velVar]);
@@ -803,6 +810,16 @@ function makeSystemA(getExtTexture) {
     strandAPhaseOffset: { value: HELIX_CONVENTION.strandAPhaseOffset },
     strandBPhaseOffset: { value: HELIX_CONVENTION.strandBPhaseOffset },
     angleUnitScale: { value: HELIX_CONVENTION.angleUnitScale }
+  });
+
+  // RouteTrail uniforms
+  Object.assign(routeTrailVar.material.uniforms, {
+    dt: { value: 0.016 },
+    nodeCount: { value: NODE_COUNT },
+    routeTrailBase: { value: ROUTE_TRAIL_BASE },
+    trailSamples: { value: TRAIL_SAMPLES },
+    trailSpacing: { value: Math.max(DS * 0.6, 0.35) },
+    trailRelax: { value: 0.24 }
   });
 
   // PosTarget uniforms
@@ -842,7 +859,10 @@ function makeSystemA(getExtTexture) {
     helixHandednessSign: { value: HELIX_CONVENTION.handednessSign },
     strandAPhaseOffset: { value: HELIX_CONVENTION.strandAPhaseOffset },
     strandBPhaseOffset: { value: HELIX_CONVENTION.strandBPhaseOffset },
-    angleUnitScale: { value: HELIX_CONVENTION.angleUnitScale }
+    angleUnitScale: { value: HELIX_CONVENTION.angleUnitScale },
+    routeTrail: { value: null },
+    routeTrailBase: { value: ROUTE_TRAIL_BASE },
+    trailSamples: { value: TRAIL_SAMPLES }
   });
 
   // ==================== EM FIELD IN ACC SHADER ====================
@@ -911,6 +931,7 @@ function makeSystemA(getExtTexture) {
   return { 
     gpu, 
     chemVar, 
+    routeTrailVar,
     posTargetVar, 
     accVar, 
     velVar, 
@@ -933,6 +954,8 @@ const sysA = makeSystemA(() => sysB.posVar.material.uniforms.pos.value);
 
 // Bind System B as EM field source for System A
 sysA.accVar.material.uniforms.extPos.value = sysB.gpu.getCurrentRenderTarget(sysB.posVar).texture;
+
+sysA.posTargetVar.material.uniforms.routeTrail.value = sysA.gpu.getCurrentRenderTarget(sysA.routeTrailVar).texture;
 
 // Warm-up compute once before calibration so force/proxy uses initialized textures.
 sysB.gpu.compute();
@@ -1139,6 +1162,7 @@ function animate() {
   sysA.chemVar.material.uniforms.zipMode.value = zipMode;
   sysA.chemVar.material.uniforms.flowEnabled.value = sysA.posTargetVar.material.uniforms.flowEnabled.value;
   
+  sysA.routeTrailVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.time.value = t;
   sysA.posTargetVar.material.uniforms.dt.value = dt;
   sysA.posTargetVar.material.uniforms.zipMode.value = zipMode;
@@ -1157,6 +1181,8 @@ function animate() {
   sysB.velVar.material.uniforms.time.value = t;
   sysB.posVar.material.uniforms.time.value = t;
 
+  sysA.posTargetVar.material.uniforms.routeTrail.value = sysA.gpu.getCurrentRenderTarget(sysA.routeTrailVar).texture;
+
   // Compute
   sysB.gpu.compute();
   sysA.gpu.compute();
@@ -1171,6 +1197,7 @@ function animate() {
   sysA.mat.uniforms.acc.value       = sysA.gpu.getCurrentRenderTarget(sysA.accVar).texture;
   sysA.mat.uniforms.vel.value       = sysA.gpu.getCurrentRenderTarget(sysA.velVar).texture;
   sysA.mat.uniforms.pos.value       = sysA.gpu.getCurrentRenderTarget(sysA.posVar).texture;
+  sysA.posTargetVar.material.uniforms.routeTrail.value = sysA.gpu.getCurrentRenderTarget(sysA.routeTrailVar).texture;
   sysA.mat.uniforms.chem.value      = sysA.gpu.getCurrentRenderTarget(sysA.chemVar).texture;
 
   updateAlpha0Calibration();
