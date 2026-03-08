@@ -658,11 +658,15 @@ export function createCoupledPosTargetShader() {
       return smoothstep(0.01, 0.35, alphaDeficit);
     }
 
+    const int MAX_ROUTE_NODES = 256;
+
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
-    // Deterministic yellow highway from persisted route state
+    // Deterministic route from persisted state.
+    // Segment 2 traces through active same-strand particles before reaching destination.
     vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
       float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
       float s = clamp(routeState.y, 0.0, 1.0);
+      float role = routeState.z;
 
       vec3 origin = getWellPosition(i);
       vec3 base = readPos(kNode).xyz;
@@ -677,9 +681,57 @@ export function createCoupledPosTargetShader() {
 
       vec3 detour = mix(base, origin, 0.7);
 
+      float idxStrandA0 = Nn;
+      float idxStrandB0 = Nn + Nn;
+      float strandBase = mix(idxStrandB0, idxStrandA0, step(role, 1.5));
+
+      int kMax = int(clamp(floor(kNode + 0.5), 0.0, Nn - 1.0));
+
+      // Build polyline length: hub -> active same-type strand nodes -> destination.
+      vec3 polyPrev = hub;
+      float polyLen = 0.0;
+      for (int n = 0; n < MAX_ROUTE_NODES; n++){
+        if (n > kMax) break;
+        float fn = float(n);
+        float gNode = readChem(fn).x;
+        if (gNode < 0.05) continue;
+
+        vec3 pNode = readPos(strandBase + fn).xyz;
+        polyLen += length(pNode - polyPrev);
+        polyPrev = pNode;
+      }
+      polyLen += length(dest - polyPrev);
+
       if (seg < 0.5) return mix(origin, base, s);
       if (seg < 1.5) return mix(base, hub, s);
-      if (seg < 2.5) return mix(hub, dest, s);
+      if (seg < 2.5){
+        if (polyLen < 1e-5) return dest;
+
+        float targetArc = s * polyLen;
+        float acc = 0.0;
+        polyPrev = hub;
+
+        for (int n = 0; n < MAX_ROUTE_NODES; n++){
+          if (n > kMax) break;
+          float fn = float(n);
+          float gNode = readChem(fn).x;
+          if (gNode < 0.05) continue;
+
+          vec3 pNode = readPos(strandBase + fn).xyz;
+          float segLen = length(pNode - polyPrev);
+          if (targetArc <= acc + segLen){
+            float tSeg = (segLen > 1e-6) ? ((targetArc - acc) / segLen) : 1.0;
+            return mix(polyPrev, pNode, clamp(tSeg, 0.0, 1.0));
+          }
+          acc += segLen;
+          polyPrev = pNode;
+        }
+
+        float tailLen = length(dest - polyPrev);
+        if (tailLen < 1e-6) return dest;
+        float tTail = (targetArc - acc) / tailLen;
+        return mix(polyPrev, dest, clamp(tTail, 0.0, 1.0));
+      }
       if (seg < 3.5) return hub;
       if (seg < 4.5) return mix(hub, detour, s);
       return origin;
