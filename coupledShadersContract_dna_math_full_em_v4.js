@@ -185,7 +185,7 @@ export function createChemShader() {
 
     vec4 advanceRouteState(vec4 state, float queue01, float localZip, float isStrandA, float isActive, float flowOn, float dt){
       // RS_Channels: x=segment, y=progress(s), z=role/tag, w=transition/event
-      float seg = clamp(floor(state.x + 0.5), 0.0, 5.0);
+      float seg = clamp(floor(state.x + 0.5), 0.0, 2.0);
       float s = clamp(state.y, 0.0, 1.0);
       float role = mix(2.0, 1.0, isStrandA);
       float eventTag = 0.0;
@@ -196,39 +196,16 @@ export function createChemShader() {
         eventTag = 8.0; // Role-tag mismatch initialization
       }
 
-      float zipPause = 0.45;
-      float zipDetour = 0.30;
-      float zipReset = 0.15;
-
-      if (flowOn < 0.5){
+      if (flowOn < 0.5 || isActive < 0.5){
         seg = 0.0;
         s = 0.0;
-        eventTag = 5.0; // Flow disabled reset
+        eventTag = 5.0; // Flow/inactive reset
         return vec4(seg, s, role, eventTag);
       }
 
-      if (localZip < zipReset){
-        seg = 5.0;
-        s = 0.0;
-        eventTag = 4.0; // Hard reset due to low zip quality
-        return vec4(seg, s, role, eventTag);
-      }
+      float zipFactor = smoothstep(0.05, 0.95, localZip);
+      float v = dt * (0.30 + 1.2 * queue01) * (0.15 + 0.85 * zipFactor);
 
-      if (localZip < zipDetour){
-        seg = 4.0;
-        s = clamp(s + dt * 0.55, 0.0, 1.0);
-        eventTag = 3.0; // Detour mode
-        return vec4(seg, s, role, eventTag);
-      }
-
-      if (localZip < zipPause){
-        seg = 3.0;
-        s = min(s, 0.98);
-        eventTag = 2.0; // Pause mode
-        return vec4(seg, s, role, eventTag);
-      }
-
-      float v = dt * (0.45 + 1.2 * queue01);
       if (seg < 0.5){
         s += v;
         if (s >= 1.0){
@@ -658,31 +635,32 @@ export function createCoupledPosTargetShader() {
       return smoothstep(0.01, 0.35, alphaDeficit);
     }
 
+    vec3 sampleStrandRoute(float idxStrand0, float kNode, float u){
+      float kInt = floor(clamp(kNode + 0.5, 0.0, nodeCount - 1.0));
+      float segCount = max(kInt, 1.0);
+      float uSeg = clamp(u, 0.0, 1.0) * segCount;
+      float j = floor(min(uSeg, segCount - 1e-5));
+      float t = clamp(uSeg - j, 0.0, 1.0);
+
+      vec3 p0 = readPos(idxStrand0 + j).xyz;
+      vec3 p1 = readPos(idxStrand0 + min(j + 1.0, kInt)).xyz;
+      return mix(p0, p1, t);
+    }
+
     // ==================== ARCHITECTURE: RT_Waypts + RT_Advance ====================
     // Deterministic yellow highway from persisted route state
-    vec3 routeViaYellow(float i, float kNode, vec3 dest, vec4 routeState){
-      float seg = clamp(floor(routeState.x + 0.5), 0.0, 5.0);
+    vec3 routeViaYellow(float i, float kNode, float idxStrand0, vec3 dest, vec4 routeState){
+      float seg = clamp(floor(routeState.x + 0.5), 0.0, 2.0);
       float s = clamp(routeState.y, 0.0, 1.0);
 
       vec3 origin = getWellPosition(i);
-      vec3 base = readPos(kNode).xyz;
+      vec3 strandHead = readPos(idxStrand0).xyz;
+      vec3 strandK = readPos(idxStrand0 + kNode).xyz;
+      vec3 strandPath = sampleStrandRoute(idxStrand0, kNode, s);
 
-      float Nn = nodeCount;
-      float neck = neckSeg;
-      float head = headCount;
-      float perSpine = neck + head;
-      float idxSpineP0 = Nn + 2.0 * Nn;
-      float tipIdxP = idxSpineP0 + kNode * perSpine + (neck - 1.0);
-      vec3 hub = readPos(tipIdxP).xyz;
-
-      vec3 detour = mix(base, origin, 0.7);
-
-      if (seg < 0.5) return mix(origin, base, s);
-      if (seg < 1.5) return mix(base, hub, s);
-      if (seg < 2.5) return mix(hub, dest, s);
-      if (seg < 3.5) return hub;
-      if (seg < 4.5) return mix(hub, detour, s);
-      return origin;
+      if (seg < 0.5) return mix(origin, strandHead, s);
+      if (seg < 1.5) return strandPath;
+      return mix(strandK, dest, s);
 
     }
 
@@ -862,7 +840,7 @@ export function createCoupledPosTargetShader() {
 
         if (flowEnabled > 0.5){
           vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = routeViaYellow(i, k, idxStrandA0, dest, routeState);
         } else {
           outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
@@ -897,7 +875,7 @@ export function createCoupledPosTargetShader() {
 
         if (flowEnabled > 0.5){
           vec4 routeState = texture2D(chem, gl_FragCoord.xy / resolution.xy);
-          outPos = routeViaYellow(i, k, dest, routeState);
+          outPos = routeViaYellow(i, k, idxStrandB0, dest, routeState);
         } else {
           outPos = (membership < 0.5) ? getWellPosition(i) : dest;
         }
